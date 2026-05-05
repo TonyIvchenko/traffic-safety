@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# VSCode
+.vscode/
+
+# Local secrets
+.env
+
+# Test cache
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Folders
+models/
+tiles/
+infra/
+dist/
+data/
+paper/
+
+# Logs
+*.log

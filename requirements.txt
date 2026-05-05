@@ -1,0 +1,12 @@
+fastapi==0.115.12
+pandas>=2.2,<3.0
+scikit-learn==1.8.0
+h3>=4.4,<5.0
+joblib>=1.4,<2.0
+requests>=2.32,<3.0
+numpy>=1.26,<3.0
+pillow>=10.4,<11.0
+uvicorn==0.34.0
+kaggle>=1.7,<2.0
+pyshp>=2.3,<3.0
+pyarrow>=16,<21

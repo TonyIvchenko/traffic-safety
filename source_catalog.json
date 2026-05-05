@@ -1,0 +1,164 @@
+{
+  "recommended_baseline": {
+    "historical_incidents": "us_accidents",
+    "severe_calibration": "fars",
+    "historical_weather": "noaa_ncei",
+    "forecast_weather": "nws_api",
+    "road_geometry": "tiger_line",
+    "road_attributes_optional": "openstreetmap",
+    "traffic_exposure": "fhwa_hpms",
+    "work_zones": "wzdx"
+  },
+  "sources": [
+    {
+      "id": "us_accidents",
+      "category": "incidents",
+      "offline_training": true,
+      "online_inference": false,
+      "access": "public",
+      "coverage": "us_nationwide",
+      "url": "https://smoosavi.org/datasets/us_accidents",
+      "notes": "Best open nationwide incident corpus for baseline training. Validate license before production redistribution."
+    },
+    {
+      "id": "fars",
+      "category": "incidents",
+      "offline_training": true,
+      "online_inference": false,
+      "access": "public",
+      "coverage": "us_nationwide",
+      "url": "https://www.nhtsa.gov/research-data/fatality-analysis-reporting-system-fars",
+      "notes": "Official fatal crash census. Strong for severe-risk calibration, not enough for all-incident modeling."
+    },
+    {
+      "id": "crss",
+      "category": "incidents",
+      "offline_training": true,
+      "online_inference": false,
+      "access": "public",
+      "coverage": "us_nationwide",
+      "url": "https://www.nhtsa.gov/crash-data-systems/crash-report-sampling-system",
+      "notes": "Sampled crash data useful for checks and calibration, not as the main nationwide map label source."
+    },
+    {
+      "id": "state_open_crash_portals",
+      "category": "incidents",
+      "offline_training": true,
+      "online_inference": false,
+      "access": "public_fragmented",
+      "coverage": "state_local",
+      "url": "https://www.data.gov/",
+      "notes": "High value where available, but no uniform nationwide ingestion contract."
+    },
+    {
+      "id": "noaa_ncei",
+      "category": "weather",
+      "offline_training": true,
+      "online_inference": false,
+      "access": "public",
+      "coverage": "us_nationwide",
+      "url": "https://www.ncei.noaa.gov/",
+      "notes": "Official historical observations for weather joins."
+    },
+    {
+      "id": "nws_api",
+      "category": "weather",
+      "offline_training": false,
+      "online_inference": true,
+      "access": "public",
+      "coverage": "us_nationwide",
+      "url": "https://www.weather.gov/documentation/services-web-api",
+      "notes": "Best open US forecast and alerts source for live scoring."
+    },
+    {
+      "id": "fhwa_hpms",
+      "category": "exposure",
+      "offline_training": true,
+      "online_inference": false,
+      "access": "public",
+      "coverage": "us_nationwide",
+      "url": "https://www.fhwa.dot.gov/policyinformation/hpms/",
+      "notes": "Official road performance and AADT source."
+    },
+    {
+      "id": "tiger_line",
+      "category": "roads",
+      "offline_training": true,
+      "online_inference": true,
+      "access": "public",
+      "coverage": "us_nationwide",
+      "url": "https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html",
+      "notes": "Official nationwide road geometry."
+    },
+    {
+      "id": "openstreetmap",
+      "category": "roads",
+      "offline_training": true,
+      "online_inference": true,
+      "access": "public",
+      "coverage": "global",
+      "url": "https://www.openstreetmap.org/",
+      "notes": "Useful for richer road attributes like maxspeed and lane count."
+    },
+    {
+      "id": "wzdx",
+      "category": "work_zones",
+      "offline_training": true,
+      "online_inference": true,
+      "access": "public",
+      "coverage": "partial_us",
+      "url": "https://www.transportation.gov/wzdx",
+      "notes": "Public work zone exchange with uneven coverage."
+    },
+    {
+      "id": "npmrds",
+      "category": "traffic",
+      "offline_training": true,
+      "online_inference": false,
+      "access": "agency_program",
+      "coverage": "national_highway_system",
+      "url": "https://ops.fhwa.dot.gov/publications/fhwahop20028/index.htm",
+      "notes": "Strong historical speed and travel time data for public-sector partners."
+    },
+    {
+      "id": "here",
+      "category": "traffic",
+      "offline_training": true,
+      "online_inference": true,
+      "access": "subscription",
+      "coverage": "us_nationwide",
+      "url": "https://developer.here.com/",
+      "notes": "Commercial live incidents, flow, and road events."
+    },
+    {
+      "id": "tomtom",
+      "category": "traffic",
+      "offline_training": true,
+      "online_inference": true,
+      "access": "subscription",
+      "coverage": "us_nationwide",
+      "url": "https://developer.tomtom.com/",
+      "notes": "Commercial live incidents, live traffic, and historical statistics."
+    },
+    {
+      "id": "inrix",
+      "category": "traffic",
+      "offline_training": true,
+      "online_inference": true,
+      "access": "subscription",
+      "coverage": "us_nationwide",
+      "url": "https://inrix.com/",
+      "notes": "Commercial real-time and historical traffic intelligence."
+    },
+    {
+      "id": "mapbox_traffic",
+      "category": "traffic",
+      "offline_training": true,
+      "online_inference": true,
+      "access": "subscription",
+      "coverage": "us_nationwide",
+      "url": "https://www.mapbox.com/",
+      "notes": "Useful for speed and congestion anomaly signals if we use Mapbox."
+    }
+  ]
+}
