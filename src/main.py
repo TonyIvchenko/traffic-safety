@@ -854,7 +854,7 @@ def _about_page_html() -> str:
                 operational use.
                 </p>
                 <div class="about-actions">
-                  <a class="button-primary about-button" href="/map">Explore the map</a>
+                  <a class="button-primary about-button" href="/map">Explore</a>
                   <a class="button-secondary about-button" href="/contact">Ask question</a>
                 </div>
                 <div class="metric-grid about-metric-grid">
