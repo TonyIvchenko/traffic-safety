@@ -805,7 +805,7 @@ def _map_page_content() -> str:
           </div>
 
           <div class="side-section">
-            <div class="side-title">Latest run</div>
+            <div class="side-title">Last updated</div>
             <div id="ops-freshness-text" class="meta-line">-</div>
             <div id="ops-provider-text" class="meta-subline">-</div>
           </div>
