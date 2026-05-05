@@ -855,7 +855,7 @@ def _about_page_html() -> str:
                 </p>
                 <div class="about-actions">
                   <a class="button-primary about-button" href="/map">Explore the map</a>
-                  <a class="button-secondary about-button" href="/contact">Discuss partnership</a>
+                  <a class="button-secondary about-button" href="/contact">Ask question</a>
                 </div>
                 <div class="metric-grid about-metric-grid">
                   <article class="metric-card">
@@ -1070,7 +1070,7 @@ def _contact_page_html() -> str:
                     </label>
                     <label class="field">
                       <span>Email</span>
-                      <input type="email" name="email" placeholder="you@email.com" required>
+                      <input type="email" name="email" placeholder="your@email.com" required>
                     </label>
                   </div>
                   <div class="field-grid">
