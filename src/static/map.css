@@ -450,6 +450,27 @@ body {
   margin-top: 12px;
 }
 
+.about-limitations {
+  border: 1px solid rgba(203, 43, 39, 0.14);
+}
+
+.about-warning-box {
+  padding: 22px 24px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 246, 244, 0.96), rgba(255, 252, 251, 0.96));
+  border: 1px solid rgba(203, 43, 39, 0.12);
+}
+
+.about-warning-box .feature-list {
+  margin-top: 0;
+}
+
+.about-warning-note {
+  margin-top: 18px;
+  font-weight: 800;
+  color: var(--text-main);
+}
+
 .about-pipeline {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

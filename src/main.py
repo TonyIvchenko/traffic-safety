@@ -934,6 +934,108 @@ def _about_page_html() -> str:
             </section>
 
             <section class="page-card page-card--wide">
+              <div class="page-section-kicker">Data sources</div>
+              <div class="about-section-head">
+                <div>
+                  <h2>Public national datasets feed the forecast stack</h2>
+                </div>
+                <p>
+                  This system integrates multiple public datasets so roadway geometry, crash history, weather archives,
+                  and live forecast signals can be scored together in one national pipeline.
+                </p>
+              </div>
+              <div class="grid-3 about-feature-grid">
+                <article class="feature-card">
+                  <h3>FARS</h3>
+                  <p>Fatal crash records published by NHTSA provide high-severity historical incident labels.</p>
+                </article>
+                <article class="feature-card">
+                  <h3>US-Accidents</h3>
+                  <p>Large-scale roadway incident records expand the historical sample beyond fatal crashes alone.</p>
+                </article>
+                <article class="feature-card">
+                  <h3>NOAA ISD-Lite</h3>
+                  <p>Hourly historical weather observations anchor the training data with temperature, wind, and wet-hour context.</p>
+                </article>
+                <article class="feature-card">
+                  <h3>TIGER/Line roads</h3>
+                  <p>National roadway geometry is simplified into machine-readable segments that can be forecast consistently.</p>
+                </article>
+                <article class="feature-card">
+                  <h3>National Weather Service</h3>
+                  <p>Live forecasts update the current 24-hour outlook so the map reflects changing atmospheric conditions.</p>
+                </article>
+              </div>
+            </section>
+
+            <section class="page-card page-card--wide">
+              <div class="page-section-kicker">Methodology</div>
+              <div class="about-section-head">
+                <div>
+                  <h2>Dual-layer modeling balances national coverage with road-level detail</h2>
+                </div>
+                <p>
+                  The system uses a dual-layer approach: a nationwide H3-based baseline model and a road-segment level
+                  forecasting model. Predictions incorporate historical incident frequency, temporal features such as
+                  hour, day, and seasonality, and weather conditions including temperature, precipitation, wind, and
+                  related atmospheric context. Live predictions are updated using real-time weather data.
+                </p>
+              </div>
+              <div class="grid-3 about-feature-grid">
+                <article class="feature-card">
+                  <h3>Nationwide baseline</h3>
+                  <p>The H3 layer provides a coarse national prior so broad spatial patterns can be learned consistently across the country.</p>
+                </article>
+                <article class="feature-card">
+                  <h3>Segment forecasting</h3>
+                  <p>The road model refines that prior at segment scale, preserving corridor-level variation that county or state summaries lose.</p>
+                </article>
+                <article class="feature-card">
+                  <h3>Live adjustment</h3>
+                  <p>Current and forecast weather conditions shift the learned baseline so each frame responds to changing operating conditions.</p>
+                </article>
+              </div>
+            </section>
+
+            <section class="page-card page-card--wide about-limitations">
+              <div class="page-section-kicker">Limitations</div>
+              <div class="about-section-head">
+                <div>
+                  <h2>This is a research and engineering prototype</h2>
+                </div>
+                <p>
+                  The system is useful for exploration and hypothesis testing, but it should not be treated as production-grade operational guidance without deeper validation.
+                </p>
+              </div>
+              <div class="about-warning-box">
+                <ul class="feature-list">
+                  <li>Historical datasets may be incomplete or uneven across regions and time periods.</li>
+                  <li>Exposure is simplified because the current system does not incorporate traffic volume data.</li>
+                  <li>Incident reporting datasets can contain structural bias in what gets recorded and how it is classified.</li>
+                  <li>Evaluation is difficult because traffic incidents are highly imbalanced and spatially persistent.</li>
+                </ul>
+                <p class="about-warning-note">
+                  Predictions should not be used for operational decision-making without further validation.
+                </p>
+              </div>
+            </section>
+
+            <section class="page-card page-card--wide">
+              <div class="page-section-kicker">Purpose</div>
+              <div class="about-section-head">
+                <div>
+                  <h2>Why build this system at all</h2>
+                </div>
+                <p>
+                  The goal of this project is to explore how machine learning systems can support transportation safety,
+                  disaster response, and infrastructure resilience at national scale. It is intended to help people think
+                  more clearly about where predictive risk layers can be useful, where they remain fragile, and what
+                  better public safety tooling could look like.
+                </p>
+              </div>
+            </section>
+
+            <section class="page-card page-card--wide">
               <div class="page-section-kicker">System architecture</div>
               <div class="about-section-head">
                 <div>

@@ -124,6 +124,10 @@ def test_about_and_contact_pages_render():
     contact_response = client.get("/contact")
 
     assert about_response.status_code == 200
+    assert "Public national datasets feed the forecast stack" in about_response.text
+    assert "Dual-layer modeling balances national coverage with road-level detail" in about_response.text
+    assert "This is a research and engineering prototype" in about_response.text
+    assert "Predictions should not be used for operational decision-making without further validation." in about_response.text
     assert "End-to-end pipeline" in about_response.text
     assert "How raw records become a national risk layer" in about_response.text
     assert "Road Risk Monitor" in about_response.text
