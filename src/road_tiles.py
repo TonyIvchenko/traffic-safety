@@ -18,6 +18,7 @@ ROAD_TILE_META_PATH = TILES_DIR / "road_tiles_meta.json"
 ROAD_TILE_FORECAST_PATH = TILES_DIR / "segment_forecast_uint8.npy"
 ROAD_TILE_BASELINE_PATH = TILES_DIR / "segment_baseline_uint8.npy"
 ROAD_RASTER_TILE_DB_PATH = TILES_DIR / "road_raster_tiles.sqlite3"
+WEATHER_OVERLAY_PATH = TILES_DIR / "weather_overlay.json"
 
 ROAD_TILE_COORD_SCALE = 8.0
 DEFAULT_TILE_ZOOM_MIN = 4
@@ -212,6 +213,16 @@ def road_tile_assets_ready() -> bool:
 
 def raster_tile_assets_ready() -> bool:
     return ROAD_RASTER_TILE_DB_PATH.exists() and ROAD_TILE_META_PATH.exists()
+
+
+def weather_overlay_assets_ready() -> bool:
+    return WEATHER_OVERLAY_PATH.exists() and ROAD_TILE_META_PATH.exists()
+
+
+def load_weather_overlay() -> dict[str, object]:
+    if not WEATHER_OVERLAY_PATH.exists():
+        return {}
+    return json.loads(WEATHER_OVERLAY_PATH.read_text(encoding="utf-8"))
 
 
 @lru_cache(maxsize=2)

@@ -60,10 +60,12 @@ from road_tiles import (
     ROAD_TILE_BASELINE_PATH,
     ROAD_TILE_FORECAST_PATH,
     load_road_tile_meta,
+    load_weather_overlay,
     load_raster_tile_png,
     load_tile_payload,
     raster_tile_assets_ready,
     road_tile_assets_ready,
+    weather_overlay_assets_ready,
 )
 from segment_runtime import load_segment_runtime, score_segments_in_bbox
 from scripts.common import ROAD_SEGMENTS_PATH
@@ -671,6 +673,7 @@ def _page_config() -> dict[str, object]:
         "forecast_start_utc": str(road_meta.get("forecast_start_utc", "")),
         "forecast_end_utc": str(road_meta.get("forecast_end_utc", "")),
         "provider_label": str(road_meta.get("provider", "nws")).upper(),
+        "weather_overlay_ready": bool(weather_overlay_assets_ready()),
         "timeline": _road_timeline(len(frames)) if road_mode else _timeline(),
         "road_mode": road_mode,
         "default_frame_idx": 0,
@@ -692,9 +695,9 @@ def _site_nav(active_page: str) -> str:
     <div class="site-chrome">
       <a class="site-brandmark" href="/map">
         <div class="ops-brand">
-          <div class="ops-kicker">US ROAD RISK MONITOR</div>
+          <div class="ops-kicker">US ROAD RISK ASSESSMENT</div>
           <div class="ops-title-row">
-            <h1>Road Risk Outlook</h1>
+            <h1>Road Risk Monitor</h1>
             <span class="ops-badge">24h forecast</span>
           </div>
         </div>
@@ -790,6 +793,18 @@ def _map_page_content() -> str:
               <input id="layer-risk" type="checkbox" checked>
               <span>Risk overlay</span>
             </label>
+            <label class="layer-toggle">
+              <input id="layer-weather" type="checkbox">
+              <span>Weather overlay</span>
+            </label>
+            <div class="weather-mode-group">
+              <label class="weather-mode-label" for="weather-mode">Weather mode</label>
+              <select id="weather-mode" class="weather-mode-select">
+                <option value="precipitation">Precipitation</option>
+                <option value="temperature">Temperature</option>
+                <option value="wind">Wind</option>
+              </select>
+            </div>
             <label class="layer-toggle">
               <input id="layer-roads" type="checkbox" checked>
               <span>Google roads</span>
@@ -1507,6 +1522,7 @@ def health() -> dict[str, object]:
         "overlay_ready": bool((TILES_DIR / "overlay.npz").exists()),
         "road_tiles_ready": road_tile_assets_ready(),
         "road_raster_tiles_ready": raster_tile_assets_ready(),
+        "weather_overlay_ready": weather_overlay_assets_ready(),
         "road_tiles_generated_at_utc": road_tile_meta.get("generated_at_utc"),
         "live_providers": [
             {
@@ -1864,6 +1880,16 @@ def segment_tiles_meta() -> JSONResponse:
         raise HTTPException(status_code=404, detail="road tiles are not ready")
     return JSONResponse(
         content=load_road_tile_meta(),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@api.get("/weather-overlay/meta")
+def weather_overlay_meta() -> JSONResponse:
+    if not weather_overlay_assets_ready():
+        raise HTTPException(status_code=404, detail="weather overlay is not ready")
+    return JSONResponse(
+        content=load_weather_overlay(),
         headers={"Cache-Control": "no-store"},
     )
 

@@ -60,6 +60,8 @@ def test_map_html_uses_local_static_assets():
     assert '<div id="risk-map-shell"' in html
     assert 'data-config="' in html
     assert "Traffic Safety" in html
+    assert 'id="layer-weather"' in html
+    assert 'id="weather-mode"' in html
 
 
 def test_document_html_includes_google_analytics_when_configured(monkeypatch):
@@ -83,6 +85,41 @@ def test_tiles_are_served():
     assert response.status_code == 200
     assert "image/png" in response.headers["content-type"]
     assert len(response.content) > 0
+
+
+def test_weather_overlay_endpoint_uses_cached_payload(monkeypatch):
+    monkeypatch.setattr(MODULE, "weather_overlay_assets_ready", lambda: True)
+    monkeypatch.setattr(
+        MODULE,
+        "load_weather_overlay",
+        lambda: {
+            "layer_kind": "precip_probability_pct",
+            "frame_labels": ["+0h", "+1h"],
+            "available_layers": [
+                {"id": "precipitation", "renderer": "heatmap"},
+                {"id": "temperature", "renderer": "heatmap"},
+                {"id": "wind", "renderer": "arrows"},
+            ],
+            "stations": [
+                {
+                    "lat": 34.0,
+                    "lon": -118.0,
+                    "precip_probability_pct": [10.0, 20.0],
+                    "temp_c": [18.0, 19.0],
+                    "wind_speed_mps": [4.0, 5.0],
+                    "wind_dir_deg": [270.0, 275.0],
+                }
+            ],
+        },
+    )
+    client = TestClient(MODULE.api)
+
+    response = client.get("/weather-overlay/meta")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["layer_kind"] == "precip_probability_pct"
+    assert len(payload["stations"]) == 1
 
 
 def test_live_risk_endpoint_uses_mocked_snapshot(monkeypatch):

@@ -68,6 +68,8 @@
     const freshnessNode = root.querySelector("#ops-freshness-text");
     const providerNode = root.querySelector("#ops-provider-text");
     const layerRiskToggle = root.querySelector("#layer-risk");
+    const layerWeatherToggle = root.querySelector("#layer-weather");
+    const weatherModeSelect = root.querySelector("#weather-mode");
     const layerRoadsToggle = root.querySelector("#layer-roads");
     const zoomHintNode = root.querySelector("#risk-zoom-hint");
 
@@ -121,6 +123,13 @@
       freshnessNode.textContent = updated;
       providerNode.textContent = `${cfg.provider_label || "NWS"} blended weather`;
     };
+
+    if (layerWeatherToggle && !cfg.weather_overlay_ready) {
+      layerWeatherToggle.checked = false;
+      layerWeatherToggle.disabled = true;
+      layerWeatherToggle.title = "Weather overlay will appear after the forecast refresh writes weather assets.";
+      if (weatherModeSelect) weatherModeSelect.disabled = true;
+    }
 
     const renderTimelineScaffold = () => {
       const timeline = cfg.timeline || {
@@ -186,20 +195,31 @@
     let map = null;
     let infoWindow = null;
     let roadOverlay = null;
+    let weatherOverlayData = null;
+    let weatherOverlayPromise = null;
+    let weatherFieldBase = null;
+    let weatherFieldNext = null;
+    let weatherFieldFrameKey = "";
+    let weatherWindOverlay = [];
+    let weatherWindFrameKey = "";
     const activeVectorTiles = new Set();
     const activeRasterTiles = new Set();
     const roadTileCache = new Map();
     const segmentDetailCache = new Map();
+    const weatherFrameCache = new Map();
     const roadVectorMinZoom = Number(cfg.vector_zoom_min || 9);
     const roadRasterMaxZoom = Number(cfg.raster_zoom_max || 8);
     const frameDurationMs = 900;
     const vectorRepaintMinIntervalMs = 48;
+    const weatherOverlayMinIntervalMs = 48;
     let playRaf = 0;
     let playLastTs = 0;
     let viewportTimelineToken = 0;
     let viewportTimelineTimer = 0;
     let vectorRepaintRaf = 0;
     let vectorRepaintLastTs = 0;
+    let weatherOverlayRaf = 0;
+    let weatherOverlayLastTs = 0;
     let hoverRaf = 0;
     let pendingHoverLatLng = null;
 
@@ -226,6 +246,7 @@
       } else {
         updateRasterTiles();
       }
+      scheduleWeatherOverlayUpdate();
     };
 
     const stopPlaying = () => {
@@ -236,6 +257,10 @@
       if (vectorRepaintRaf) {
         cancelAnimationFrame(vectorRepaintRaf);
         vectorRepaintRaf = 0;
+      }
+      if (weatherOverlayRaf) {
+        cancelAnimationFrame(weatherOverlayRaf);
+        weatherOverlayRaf = 0;
       }
       playLastTs = 0;
       timer = null;
@@ -422,6 +447,412 @@
 
     const updateTimelineHeat = (riskValues) => {
       timelinePhasesNode.style.background = timelineGradientFromValues(riskValues);
+    };
+
+    const rgbaCss = (triplet, alpha) =>
+      `rgba(${triplet[0]}, ${triplet[1]}, ${triplet[2]}, ${clamp(Number(alpha) || 0, 0, 1).toFixed(3)})`;
+
+    const weatherFieldRadiusForZoom = (zoom) => {
+      const value = Number(zoom || 5);
+      if (value <= 4) return 54;
+      if (value <= 5) return 62;
+      if (value <= 6) return 72;
+      if (value <= 7) return 84;
+      if (value <= 8) return 96;
+      if (value <= 10) return 112;
+      return 124;
+    };
+
+    const weatherFieldColorForTemp = (tempC) => {
+      const stops = [
+        [-20, [28, 91, 215]],
+        [-5, [65, 149, 241]],
+        [8, [102, 205, 255]],
+        [18, [242, 211, 82]],
+        [28, [242, 139, 55]],
+        [40, [203, 43, 39]],
+      ];
+      const value = Number(tempC || 0);
+      if (value <= stops[0][0]) return stops[0][1];
+      for (let idx = 1; idx < stops.length; idx += 1) {
+        if (value <= stops[idx][0]) {
+          const [startTemp, startColor] = stops[idx - 1];
+          const [endTemp, endColor] = stops[idx];
+          const t = clamp((value - startTemp) / Math.max(0.000001, endTemp - startTemp), 0, 1);
+          return [
+            lerp(startColor[0], endColor[0], t),
+            lerp(startColor[1], endColor[1], t),
+            lerp(startColor[2], endColor[2], t),
+          ];
+        }
+      }
+      return stops[stops.length - 1][1];
+    };
+
+    const weatherFieldAlpha = (precipPct, wetHour) => {
+      const certainty = clamp(Math.max(Number(precipPct || 0) / 100.0, Number(wetHour || 0) * 0.45), 0, 1);
+      if (!(certainty > 0.02)) return 0;
+      return clamp(Math.pow(certainty, 0.92) * 0.94, 0.06, 0.96);
+    };
+
+    const weatherFieldAlphaForTemperature = (tempC) => {
+      const value = Number(tempC);
+      if (!Number.isFinite(value)) return 0;
+      const distanceFromMild = Math.abs(value - 16.0);
+      return clamp(0.18 + Math.min(1, distanceFromMild / 24.0) * 0.52, 0.18, 0.7);
+    };
+
+    const weatherHeatGradient = (mode) => {
+      if (mode === "temperature") {
+        return [
+          "rgba(0, 0, 0, 0)",
+          "rgba(28, 91, 215, 0.18)",
+          "rgba(65, 149, 241, 0.34)",
+          "rgba(102, 205, 255, 0.5)",
+          "rgba(242, 211, 82, 0.64)",
+          "rgba(242, 139, 55, 0.8)",
+          "rgba(203, 43, 39, 0.92)",
+        ];
+      }
+      return [
+        "rgba(0, 0, 0, 0)",
+        "rgba(112, 168, 255, 0.08)",
+        "rgba(95, 153, 248, 0.2)",
+        "rgba(78, 133, 231, 0.36)",
+        "rgba(58, 110, 210, 0.56)",
+        "rgba(38, 81, 178, 0.76)",
+        "rgba(20, 52, 132, 0.92)",
+      ];
+    };
+
+    const ensureWeatherOverlayData = async () => {
+      if (weatherOverlayData) return weatherOverlayData;
+      if (weatherOverlayPromise) return weatherOverlayPromise;
+      weatherOverlayPromise = fetch('/weather-overlay/meta', { cache: 'no-store' })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(`Weather overlay request failed: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then((payload) => {
+          weatherOverlayData = payload;
+          return payload;
+        })
+        .catch((err) => {
+          weatherOverlayPromise = null;
+          throw err;
+        });
+      return weatherOverlayPromise;
+    };
+
+    const normalizeDegrees = (degrees) => {
+      const value = Number(degrees);
+      if (!Number.isFinite(value)) return null;
+      return ((value % 360) + 360) % 360;
+    };
+
+    const interpolateDegrees = (startDeg, endDeg, t) => {
+      const start = normalizeDegrees(startDeg);
+      const end = normalizeDegrees(endDeg);
+      if (start == null && end == null) return null;
+      if (start == null) return end;
+      if (end == null) return start;
+      const delta = ((((end - start) % 360) + 540) % 360) - 180;
+      return normalizeDegrees(start + delta * t);
+    };
+
+    const windColorForSpeed = (speedMps) => {
+      const t = clamp(Number(speedMps || 0) / 18.0, 0, 1);
+      const start = [38, 132, 255];
+      const mid = [82, 196, 139];
+      const end = [242, 139, 55];
+      if (t <= 0.55) {
+        const local = t / 0.55;
+        return rgbCss([
+          lerp(start[0], mid[0], local),
+          lerp(start[1], mid[1], local),
+          lerp(start[2], mid[2], local),
+        ]);
+      }
+      const local = (t - 0.55) / 0.45;
+      return rgbCss([
+        lerp(mid[0], end[0], local),
+        lerp(mid[1], end[1], local),
+        lerp(mid[2], end[2], local),
+      ]);
+    };
+
+    const windScaleForSpeed = (speedMps, zoom) =>
+      clamp(3.8 + Number(speedMps || 0) * 0.22 + Math.max(0, (Number(zoom || 5) - 5) * 0.08), 3.8, 9.5);
+
+    const createCanvasOverlay = (drawFn, zIndex = 4) => {
+      class CanvasOverlay extends google.maps.OverlayView {
+        constructor() {
+          super();
+          this.div = null;
+          this.canvas = null;
+          this.visible = false;
+          this.opacity = 0;
+          this.state = null;
+        }
+
+        onAdd() {
+          this.div = document.createElement('div');
+          this.div.style.position = 'absolute';
+          this.div.style.inset = '0';
+          this.div.style.pointerEvents = 'none';
+          this.div.style.zIndex = String(zIndex);
+
+          this.canvas = document.createElement('canvas');
+          this.canvas.style.width = '100%';
+          this.canvas.style.height = '100%';
+          this.canvas.style.display = 'block';
+          this.div.appendChild(this.canvas);
+
+          this.getPanes().overlayLayer.appendChild(this.div);
+          this.div.style.display = this.visible ? 'block' : 'none';
+          this.div.style.opacity = String(this.opacity);
+          if (this.state) {
+            this.draw();
+          }
+        }
+
+        draw() {
+          if (!this.div || !this.canvas) return;
+          const mapDiv = this.getMap()?.getDiv();
+          const projection = this.getProjection();
+          if (!mapDiv || !projection) return;
+          const width = Math.max(1, mapDiv.clientWidth);
+          const height = Math.max(1, mapDiv.clientHeight);
+          const dpr = window.devicePixelRatio || 1;
+          if (this.canvas.width !== Math.round(width * dpr) || this.canvas.height !== Math.round(height * dpr)) {
+            this.canvas.width = Math.round(width * dpr);
+            this.canvas.height = Math.round(height * dpr);
+          }
+          const ctx = this.canvas.getContext('2d');
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx.clearRect(0, 0, width, height);
+          this.div.style.display = this.visible ? 'block' : 'none';
+          this.div.style.opacity = String(this.opacity);
+          if (!this.visible || !this.state) return;
+          drawFn(ctx, projection, width, height, this.state);
+        }
+
+        onRemove() {
+          if (this.div?.parentNode) this.div.parentNode.removeChild(this.div);
+          this.div = null;
+          this.canvas = null;
+        }
+
+        setState(state, opacity = this.opacity, visible = true) {
+          this.state = state;
+          this.opacity = opacity;
+          this.visible = visible;
+          this.draw();
+        }
+
+        setOpacity(opacity) {
+          this.opacity = opacity;
+          if (this.div) this.div.style.opacity = String(opacity);
+        }
+
+        setVisible(visible) {
+          this.visible = visible;
+          if (this.div) this.div.style.display = visible ? 'block' : 'none';
+        }
+
+        redraw() {
+          this.draw();
+        }
+      }
+
+      const overlay = new CanvasOverlay();
+      overlay.setMap(map);
+      return overlay;
+    };
+
+    const clearWeatherFieldOverlays = () => {
+      [weatherFieldBase, weatherFieldNext].forEach((overlay) => {
+        if (overlay) overlay.setMap(null);
+      });
+      weatherFieldFrameKey = '';
+    };
+
+    const clearWeatherWindOverlay = () => {
+      weatherWindOverlay.forEach((marker) => marker.setMap(null));
+      weatherWindFrameKey = '';
+    };
+
+    const buildWeatherFieldFrame = (payload, frameIdx, mode) => {
+      const cacheKey = `field:${mode}:${frameIdx}`;
+      if (weatherFrameCache.has(cacheKey)) return weatherFrameCache.get(cacheKey);
+      const stations = Array.isArray(payload?.stations) ? payload.stations : [];
+      const points = stations
+        .map((station) => {
+          const tempValues = Array.isArray(station?.temp_c) ? station.temp_c : [];
+          const precipValues = Array.isArray(station?.precip_probability_pct)
+            ? station.precip_probability_pct
+            : [];
+          const wetValues = Array.isArray(station?.wet_hour) ? station.wet_hour : [];
+          const tempC = Number(tempValues[frameIdx]);
+          const precipPct = Number(precipValues[frameIdx] ?? 0);
+          const wetHour = Number(wetValues[frameIdx] ?? 0);
+          if (!Number.isFinite(tempC)) return null;
+          if (mode === "temperature") {
+            const normalized = clamp((tempC + 20.0) / 60.0, 0, 1);
+            return {
+              location: new google.maps.LatLng(Number(station.lat), Number(station.lon)),
+              weight: 0.05 + normalized * 0.95,
+            };
+          }
+          const alpha = weatherFieldAlpha(precipPct, wetHour);
+          if (!(alpha > 0)) return null;
+          return {
+            location: new google.maps.LatLng(Number(station.lat), Number(station.lon)),
+            weight: alpha,
+          };
+        })
+        .filter(Boolean);
+      weatherFrameCache.set(cacheKey, points);
+      return points;
+    };
+
+    const ensureWeatherFieldOverlays = () => {
+      if (!weatherFieldBase) {
+        weatherFieldBase = new google.maps.visualization.HeatmapLayer({
+          dissipating: true,
+          radius: weatherFieldRadiusForZoom(map?.getZoom() || 5),
+          opacity: 0,
+        });
+      }
+      if (!weatherFieldNext) {
+        weatherFieldNext = new google.maps.visualization.HeatmapLayer({
+          dissipating: true,
+          radius: weatherFieldRadiusForZoom(map?.getZoom() || 5),
+          opacity: 0,
+        });
+      }
+    };
+
+    const ensureWeatherWindOverlay = () => {
+      if (!Array.isArray(weatherWindOverlay)) weatherWindOverlay = [];
+    };
+
+    const buildWindOverlayState = (payload) => {
+      const stations = Array.isArray(payload?.stations) ? payload.stations : [];
+      const { baseFrameIdx, nextFrameIdx, mixValue } = getFrameBlend();
+      const arrows = stations
+        .map((station) => {
+          const speeds = Array.isArray(station?.wind_speed_mps) ? station.wind_speed_mps : [];
+          const dirs = Array.isArray(station?.wind_dir_deg) ? station.wind_dir_deg : [];
+          const speedStart = Number(speeds[baseFrameIdx] ?? 0);
+          const speedEnd = Number(speeds[nextFrameIdx] ?? speedStart);
+          const speed = mix(speedStart, speedEnd, mixValue);
+          const direction = interpolateDegrees(dirs[baseFrameIdx], dirs[nextFrameIdx], mixValue);
+          if (!(speed > 0.5) || direction == null) return null;
+          return {
+            lat: Number(station.lat),
+            lon: Number(station.lon),
+            headingDeg: normalizeDegrees(direction + 180),
+            scale: windScaleForSpeed(speed, map?.getZoom() || 5),
+            alpha: clamp(0.42 + speed / 20.0, 0.42, 0.94),
+            color: windColorForSpeed(speed),
+          };
+        })
+        .filter(Boolean);
+      return { arrows };
+    };
+
+    const updateWeatherOverlay = async () => {
+      if (!map || !layerWeatherToggle) return;
+      if (!cfg.weather_overlay_ready || !layerWeatherToggle.checked) {
+        clearWeatherFieldOverlays();
+        clearWeatherWindOverlay();
+        return;
+      }
+      try {
+        const payload = await ensureWeatherOverlayData();
+        const { baseFrameIdx, nextFrameIdx, mixValue } = getFrameBlend();
+        const zoomKey = Math.round(map.getZoom() || 0);
+        const weatherMode = weatherModeSelect?.value || "precipitation";
+
+        if (weatherMode === "wind") {
+          clearWeatherFieldOverlays();
+          const stations = Array.isArray(payload?.stations) ? payload.stations : [];
+          const hasDirections = stations.some((station) => Array.isArray(station?.wind_dir_deg));
+          if (!hasDirections) {
+            updateStatus('Wind arrows will appear after the next forecast refresh writes wind directions.', true);
+            clearWeatherWindOverlay();
+            return;
+          }
+          ensureWeatherWindOverlay();
+          const frameKey = `${baseFrameIdx}:${nextFrameIdx}:${mixValue.toFixed(3)}:${zoomKey}`;
+          if (weatherWindFrameKey !== frameKey) {
+            const state = buildWindOverlayState(payload);
+            state.arrows.forEach((arrow, idx) => {
+              const icon = {
+                path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                scale: arrow.scale,
+                rotation: arrow.headingDeg,
+                fillColor: arrow.color,
+                fillOpacity: arrow.alpha,
+                strokeColor: arrow.color,
+                strokeOpacity: arrow.alpha,
+                strokeWeight: 1.2,
+              };
+              if (!weatherWindOverlay[idx]) {
+                weatherWindOverlay[idx] = new google.maps.Marker({
+                  clickable: false,
+                  zIndex: 4,
+                });
+              }
+              weatherWindOverlay[idx].setPosition({ lat: arrow.lat, lng: arrow.lon });
+              weatherWindOverlay[idx].setIcon(icon);
+              weatherWindOverlay[idx].setMap(map);
+            });
+            for (let idx = state.arrows.length; idx < weatherWindOverlay.length; idx += 1) {
+              weatherWindOverlay[idx].setMap(null);
+            }
+            weatherWindFrameKey = frameKey;
+          }
+        } else {
+          clearWeatherWindOverlay();
+          ensureWeatherFieldOverlays();
+          const frameKey = `${weatherMode}:${baseFrameIdx}:${nextFrameIdx}:${zoomKey}`;
+          const radius = weatherFieldRadiusForZoom(zoomKey);
+          const gradient = weatherHeatGradient(weatherMode);
+          const nextOpacity = nextFrameIdx === baseFrameIdx ? 0 : mixValue;
+          weatherFieldBase.setOptions({ map, radius, gradient, opacity: 1 - nextOpacity });
+          weatherFieldNext.setOptions({ map: nextFrameIdx === baseFrameIdx ? null : map, radius, gradient, opacity: nextOpacity });
+          if (weatherFieldFrameKey !== frameKey) {
+            weatherFieldBase.setData(buildWeatherFieldFrame(payload, baseFrameIdx, weatherMode));
+            weatherFieldNext.setData(buildWeatherFieldFrame(payload, nextFrameIdx, weatherMode));
+            weatherFieldFrameKey = frameKey;
+          }
+        }
+
+        updateStatus('');
+      } catch (err) {
+        updateStatus(err.message || 'Failed to load weather overlay.', true);
+      }
+    };
+
+    const runScheduledWeatherOverlayUpdate = (timestamp = 0) => {
+      const now = Number(timestamp || performance.now());
+      if (now - weatherOverlayLastTs < weatherOverlayMinIntervalMs) {
+        weatherOverlayRaf = requestAnimationFrame(runScheduledWeatherOverlayUpdate);
+        return;
+      }
+      weatherOverlayRaf = 0;
+      weatherOverlayLastTs = now;
+      updateWeatherOverlay();
+    };
+
+    const scheduleWeatherOverlayUpdate = () => {
+      if (!map || !layerWeatherToggle?.checked) return;
+      if (weatherOverlayRaf) return;
+      weatherOverlayRaf = requestAnimationFrame(runScheduledWeatherOverlayUpdate);
     };
 
     const roadStrokeWeight = (roadKind, zoom) => {
@@ -1101,6 +1532,7 @@
 
       map.addListener("idle", () => {
         installOverlay();
+        scheduleWeatherOverlayUpdate();
       });
       map.addListener("click", (event) => {
         showRoadDetail(event);
@@ -1115,8 +1547,10 @@
         updateZoomHint();
         scheduleTimelineHeatRefresh(40);
         scheduleHoverCursorUpdate(null);
+        scheduleWeatherOverlayUpdate();
       });
       updateZoomHint();
+      scheduleWeatherOverlayUpdate();
     };
 
     const loadGoogleMaps = () => {
@@ -1134,7 +1568,7 @@
         initGoogleMap();
       };
       const script = document.createElement("script");
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${cfg.api_key}&callback=${callbackName}&v=weekly`;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${cfg.api_key}&callback=${callbackName}&v=weekly&libraries=visualization`;
       script.async = true;
       script.defer = true;
       script.onerror = () => {
@@ -1150,6 +1584,18 @@
     playBtn.addEventListener("click", () => setPlaying(!timer));
     layerRiskToggle?.addEventListener("change", () => {
       installOverlay();
+    });
+    layerWeatherToggle?.addEventListener("change", () => {
+      if (!layerWeatherToggle.checked) {
+        clearWeatherFieldOverlays();
+        clearWeatherWindOverlay();
+      }
+      scheduleWeatherOverlayUpdate();
+    });
+    weatherModeSelect?.addEventListener("change", () => {
+      clearWeatherFieldOverlays();
+      clearWeatherWindOverlay();
+      scheduleWeatherOverlayUpdate();
     });
     layerRoadsToggle?.addEventListener("change", () => {
       applyMapStyles();

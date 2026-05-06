@@ -41,6 +41,7 @@ from road_tiles import (
     ROAD_TILE_FORECAST_PATH,
     ROAD_TILE_META_PATH,
     ROAD_RASTER_TILE_DB_PATH,
+    WEATHER_OVERLAY_PATH,
 )
 from segment_model_support import (
     DEFAULT_MTFCC_VALUES,
@@ -90,7 +91,9 @@ class StationForecastHour:
     temp_c: float
     relative_humidity_pct: float
     wind_speed_mps: float
+    wind_dir_deg: float | None
     wet_hour: float
+    precip_probability_pct: float
     source: str
 
 
@@ -145,6 +148,40 @@ def humidity_value(humidity_pct: float | None, temp_c: float, dewpoint_c: float)
     return float(relative_humidity_from_temp_dewpoint(temp_c, dewpoint_c).item())
 
 
+def parse_wind_direction_degrees(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) % 360.0
+    text = str(value).strip().upper()
+    if not text or text in {"CALM", "VRB", "VARIABLE"}:
+        return None
+    try:
+        return float(text) % 360.0
+    except ValueError:
+        pass
+
+    cardinal_map = {
+        "N": 0.0,
+        "NNE": 22.5,
+        "NE": 45.0,
+        "ENE": 67.5,
+        "E": 90.0,
+        "ESE": 112.5,
+        "SE": 135.0,
+        "SSE": 157.5,
+        "S": 180.0,
+        "SSW": 202.5,
+        "SW": 225.0,
+        "WSW": 247.5,
+        "W": 270.0,
+        "WNW": 292.5,
+        "NW": 315.0,
+        "NNW": 337.5,
+    }
+    return cardinal_map.get(text)
+
+
 def fallback_station_series(
     *,
     station_index: int,
@@ -174,7 +211,9 @@ def fallback_station_series(
                 temp_c=float(weather[0]),
                 relative_humidity_pct=float(weather[1]),
                 wind_speed_mps=float(weather[2]),
+                wind_dir_deg=None,
                 wet_hour=float(weather[3]),
+                precip_probability_pct=float(weather[3]) * 100.0,
                 source="climatology",
             )
         )
@@ -211,6 +250,7 @@ def fetch_nws_station_series(
         dewpoint_c = float(quantitative_value(period.get("dewpoint")) or 0.0)
         humidity_pct = quantitative_value(period.get("relativeHumidity"))
         wind_speed_mps = float(parse_wind_speed_string_mps(period.get("windSpeed")))
+        wind_dir_deg = parse_wind_direction_degrees(period.get("windDirection"))
         precipitation_probability = quantitative_value(
             period.get("probabilityOfPrecipitation")
         )
@@ -231,7 +271,9 @@ def fetch_nws_station_series(
                 temp_c=temp_c,
                 relative_humidity_pct=humidity_value(humidity_pct, temp_c, dewpoint_c),
                 wind_speed_mps=max(0.0, wind_speed_mps),
+                wind_dir_deg=wind_dir_deg,
                 wet_hour=wet_hour_from_summary(summary, precipitation_probability),
+                precip_probability_pct=float(precipitation_probability or 0.0),
                 source="nws",
             )
         )
@@ -292,7 +334,9 @@ def build_station_weather_matrices(
         "temp_c": np.zeros((station_count, hours), dtype=np.float32),
         "relative_humidity_pct": np.zeros((station_count, hours), dtype=np.float32),
         "wind_speed_mps": np.zeros((station_count, hours), dtype=np.float32),
+        "wind_dir_deg": np.full((station_count, hours), np.nan, dtype=np.float32),
         "wet_hour": np.zeros((station_count, hours), dtype=np.float32),
+        "precip_probability_pct": np.zeros((station_count, hours), dtype=np.float32),
     }
     for station_index, rows in series_by_station.items():
         for hour_idx, row in enumerate(rows[:hours]):
@@ -301,8 +345,97 @@ def build_station_weather_matrices(
                 row.relative_humidity_pct
             )
             matrices["wind_speed_mps"][station_index, hour_idx] = float(row.wind_speed_mps)
+            if row.wind_dir_deg is not None:
+                matrices["wind_dir_deg"][station_index, hour_idx] = float(row.wind_dir_deg)
             matrices["wet_hour"][station_index, hour_idx] = float(row.wet_hour)
+            matrices["precip_probability_pct"][station_index, hour_idx] = float(
+                row.precip_probability_pct
+            )
     return matrices
+
+
+def write_weather_overlay(
+    *,
+    representative: pd.DataFrame,
+    series_by_station: dict[int, list[StationForecastHour]],
+    station_weather: dict[str, np.ndarray],
+    source_counts: dict[str, int],
+    generated_at: datetime,
+    forecast_start_utc: datetime,
+    forecast_end_utc: datetime,
+    provider: str,
+    hours: int,
+) -> None:
+    stations_payload = []
+    precip_matrix = np.asarray(
+        station_weather["precip_probability_pct"],
+        dtype=np.float32,
+    )
+    temp_matrix = np.asarray(station_weather["temp_c"], dtype=np.float32)
+    wind_matrix = np.asarray(station_weather["wind_speed_mps"], dtype=np.float32)
+    wind_dir_matrix = np.asarray(station_weather["wind_dir_deg"], dtype=np.float32)
+    wet_matrix = np.asarray(station_weather["wet_hour"], dtype=np.float32)
+    for _, row in representative.iterrows():
+        station_index = int(row["station_index"])
+        stations_payload.append(
+            {
+                "station_index": station_index,
+                "lat": round(float(row["LAT"]), 6),
+                "lon": round(float(row["LON"]), 6),
+                "source": str(series_by_station[station_index][0].source),
+                "precip_probability_pct": [
+                    round(float(value), 2) for value in precip_matrix[station_index, :hours]
+                ],
+                "temp_c": [round(float(value), 2) for value in temp_matrix[station_index, :hours]],
+                "wind_speed_mps": [
+                    round(float(value), 2) for value in wind_matrix[station_index, :hours]
+                ],
+                "wind_dir_deg": [
+                    None if math.isnan(float(value)) else round(float(value), 1)
+                    for value in wind_dir_matrix[station_index, :hours]
+                ],
+                "wet_hour": [round(float(value), 3) for value in wet_matrix[station_index, :hours]],
+            }
+        )
+
+    payload = {
+        "run_id": generated_at.strftime("%Y%m%dT%H%M%SZ"),
+        "generated_at_utc": generated_at.isoformat(),
+        "forecast_start_utc": forecast_start_utc.isoformat(),
+        "forecast_end_utc": forecast_end_utc.isoformat(),
+        "provider": str(provider),
+        "hours": int(hours),
+        "frame_labels": [f"+{hour}h" for hour in range(int(hours))],
+        "layer_kind": "precip_probability_pct",
+        "layer_label": "Precipitation probability",
+        "scale_min": 0.0,
+        "scale_max": 100.0,
+        "available_layers": [
+            {
+                "id": "precipitation",
+                "label": "Precipitation",
+                "renderer": "heatmap",
+                "data_key": "precip_probability_pct",
+            },
+            {
+                "id": "temperature",
+                "label": "Temperature",
+                "renderer": "heatmap",
+                "data_key": "temp_c",
+            },
+            {
+                "id": "wind",
+                "label": "Wind",
+                "renderer": "arrows",
+                "speed_key": "wind_speed_mps",
+                "direction_key": "wind_dir_deg",
+            },
+        ],
+        "station_count": int(len(stations_payload)),
+        "station_source_counts": dict(source_counts),
+        "stations": stations_payload,
+    }
+    WEATHER_OVERLAY_PATH.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def build_station_timing_matrices(
@@ -1030,6 +1163,17 @@ def main() -> None:
     )
 
     generated_at = datetime.now(timezone.utc).replace(microsecond=0)
+    write_weather_overlay(
+        representative=representative,
+        series_by_station=station_series,
+        station_weather=station_weather,
+        source_counts=source_counts,
+        generated_at=generated_at,
+        forecast_start_utc=forecast_start_utc,
+        forecast_end_utc=forecast_end_utc,
+        provider=str(args.provider),
+        hours=int(args.hours),
+    )
     meta = {
         "run_id": generated_at.strftime("%Y%m%dT%H%M%SZ"),
         "generated_at_utc": generated_at.isoformat(),
@@ -1052,12 +1196,14 @@ def main() -> None:
         "baseline_path": str(ROAD_TILE_BASELINE_PATH),
         "tile_db_path": str(ROAD_TILE_DB_PATH),
         "raster_tile_db_path": str(ROAD_RASTER_TILE_DB_PATH),
+        "weather_overlay_path": str(WEATHER_OVERLAY_PATH),
         "segment_count": int(len(station_indices)),
         "station_count": int(len(representative)),
         "station_source_counts": source_counts,
     }
     ROAD_TILE_META_PATH.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     print(f"wrote {ROAD_TILE_FORECAST_PATH}")
+    print(f"wrote {WEATHER_OVERLAY_PATH}")
     print(f"wrote {ROAD_TILE_META_PATH}")
 
 
