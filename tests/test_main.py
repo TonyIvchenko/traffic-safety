@@ -61,7 +61,9 @@ def test_map_html_uses_local_static_assets():
     assert 'data-config="' in html
     assert "Traffic Safety" in html
     assert 'id="layer-weather"' in html
-    assert 'id="weather-mode"' in html
+    assert 'id="layer-weather-precip"' in html
+    assert 'id="layer-weather-wind"' in html
+    assert 'id="weather-legend"' in html
 
 
 def test_document_html_includes_google_analytics_when_configured(monkeypatch):
@@ -96,8 +98,8 @@ def test_weather_overlay_endpoint_uses_cached_payload(monkeypatch):
             "layer_kind": "precip_probability_pct",
             "frame_labels": ["+0h", "+1h"],
             "available_layers": [
-                {"id": "precipitation", "renderer": "heatmap"},
-                {"id": "temperature", "renderer": "heatmap"},
+                {"id": "precipitation", "renderer": "raster"},
+                {"id": "temperature", "renderer": "raster"},
                 {"id": "wind", "renderer": "arrows"},
             ],
             "stations": [
@@ -120,7 +122,6 @@ def test_weather_overlay_endpoint_uses_cached_payload(monkeypatch):
     payload = response.json()
     assert payload["layer_kind"] == "precip_probability_pct"
     assert len(payload["stations"]) == 1
-
 
 def test_live_risk_endpoint_uses_mocked_snapshot(monkeypatch):
     snapshot = SimpleNamespace(

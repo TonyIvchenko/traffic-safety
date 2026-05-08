@@ -19,6 +19,7 @@ ROAD_TILE_FORECAST_PATH = TILES_DIR / "segment_forecast_uint8.npy"
 ROAD_TILE_BASELINE_PATH = TILES_DIR / "segment_baseline_uint8.npy"
 ROAD_RASTER_TILE_DB_PATH = TILES_DIR / "road_raster_tiles.sqlite3"
 WEATHER_OVERLAY_PATH = TILES_DIR / "weather_overlay.json"
+WEATHER_RASTER_TILE_DB_PATH = TILES_DIR / "weather_raster_tiles.sqlite3"
 
 ROAD_TILE_COORD_SCALE = 8.0
 DEFAULT_TILE_ZOOM_MIN = 4
@@ -225,6 +226,10 @@ def load_weather_overlay() -> dict[str, object]:
     return json.loads(WEATHER_OVERLAY_PATH.read_text(encoding="utf-8"))
 
 
+def weather_raster_assets_ready() -> bool:
+    return WEATHER_RASTER_TILE_DB_PATH.exists() and ROAD_TILE_META_PATH.exists()
+
+
 @lru_cache(maxsize=2)
 def _load_forecast_scores(path_str: str, mtime_ns: int) -> np.ndarray:
     del mtime_ns
@@ -331,6 +336,49 @@ def load_raster_tile_png(frame_idx: int, z: int, x: int, y: int) -> bytes | None
         str(ROAD_RASTER_TILE_DB_PATH),
         db_mtime_ns,
         revision,
+        int(frame_idx),
+        int(z),
+        int(x),
+        int(y),
+    )
+
+
+@lru_cache(maxsize=65536)
+def _load_cached_weather_raster_tile(
+    db_path_str: str,
+    db_mtime_ns: int,
+    revision: str,
+    mode: str,
+    frame_idx: int,
+    z: int,
+    x: int,
+    y: int,
+) -> bytes | None:
+    del db_mtime_ns, revision
+    db_uri = f"file:{db_path_str}?mode=ro"
+    with sqlite3.connect(db_uri, uri=True) as connection:
+        row = connection.execute(
+            """
+            SELECT png
+            FROM raster_tiles
+            WHERE mode = ? AND frame_idx = ? AND z = ? AND x = ? AND y = ?
+            """,
+            (str(mode), int(frame_idx), int(z), int(x), int(y)),
+        ).fetchone()
+    return None if row is None else bytes(row[0])
+
+
+def load_weather_raster_tile_png(mode: str, frame_idx: int, z: int, x: int, y: int) -> bytes | None:
+    if not weather_raster_assets_ready():
+        return None
+    meta = load_road_tile_meta()
+    revision = str(meta.get("run_id") or meta.get("generated_at_utc") or "")
+    db_mtime_ns = WEATHER_RASTER_TILE_DB_PATH.stat().st_mtime_ns
+    return _load_cached_weather_raster_tile(
+        str(WEATHER_RASTER_TILE_DB_PATH),
+        db_mtime_ns,
+        revision,
+        str(mode),
         int(frame_idx),
         int(z),
         int(x),

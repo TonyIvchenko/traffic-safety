@@ -69,7 +69,11 @@
     const providerNode = root.querySelector("#ops-provider-text");
     const layerRiskToggle = root.querySelector("#layer-risk");
     const layerWeatherToggle = root.querySelector("#layer-weather");
-    const weatherModeSelect = root.querySelector("#weather-mode");
+    const layerWeatherPrecipToggle = root.querySelector("#layer-weather-precip");
+    const layerWeatherWindToggle = root.querySelector("#layer-weather-wind");
+    const weatherLegend = root.querySelector("#weather-legend");
+    const weatherLegendPrecip = root.querySelector("#weather-legend-precip");
+    const weatherLegendWind = root.querySelector("#weather-legend-wind");
     const layerRoadsToggle = root.querySelector("#layer-roads");
     const zoomHintNode = root.querySelector("#risk-zoom-hint");
 
@@ -124,12 +128,41 @@
       providerNode.textContent = `${cfg.provider_label || "NWS"} blended weather`;
     };
 
-    if (layerWeatherToggle && !cfg.weather_overlay_ready) {
+    if (layerWeatherToggle && !cfg.weather_overlay_ready && !cfg.weather_raster_ready) {
       layerWeatherToggle.checked = false;
       layerWeatherToggle.disabled = true;
       layerWeatherToggle.title = "Weather overlay will appear after the forecast refresh writes weather assets.";
-      if (weatherModeSelect) weatherModeSelect.disabled = true;
+      if (layerWeatherPrecipToggle) layerWeatherPrecipToggle.disabled = true;
+      if (layerWeatherWindToggle) layerWeatherWindToggle.disabled = true;
     }
+
+    const weatherPrecipEnabled = () =>
+      Boolean(layerWeatherPrecipToggle?.checked) && Boolean(cfg.weather_raster_ready);
+
+    const weatherWindEnabled = () =>
+      Boolean(layerWeatherWindToggle?.checked) && Boolean(cfg.weather_overlay_ready);
+
+    const syncWeatherMasterToggle = () => {
+      if (!layerWeatherToggle) return;
+      const precipOn = Boolean(layerWeatherPrecipToggle?.checked);
+      const windOn = Boolean(layerWeatherWindToggle?.checked);
+      const activeCount = Number(precipOn) + Number(windOn);
+      const availableCount = Number(Boolean(cfg.weather_raster_ready)) + Number(Boolean(cfg.weather_overlay_ready));
+      layerWeatherToggle.checked = activeCount > 0;
+      layerWeatherToggle.indeterminate = availableCount > 1 && activeCount === 1;
+    };
+
+    const updateWeatherUi = () => {
+      syncWeatherMasterToggle();
+      if (layerWeatherPrecipToggle) layerWeatherPrecipToggle.disabled = !cfg.weather_raster_ready;
+      if (layerWeatherWindToggle) layerWeatherWindToggle.disabled = !cfg.weather_overlay_ready;
+      const weatherOn = weatherPrecipEnabled() || weatherWindEnabled();
+      if (weatherLegend) {
+        weatherLegend.hidden = !weatherOn;
+      }
+      if (weatherLegendPrecip) weatherLegendPrecip.hidden = !weatherPrecipEnabled();
+      if (weatherLegendWind) weatherLegendWind.hidden = !weatherWindEnabled();
+    };
 
     const renderTimelineScaffold = () => {
       const timeline = cfg.timeline || {
@@ -195,6 +228,8 @@
     let map = null;
     let infoWindow = null;
     let roadOverlay = null;
+    let weatherRasterOverlay = null;
+    let weatherRasterMode = "";
     let weatherOverlayData = null;
     let weatherOverlayPromise = null;
     let weatherFieldBase = null;
@@ -204,6 +239,7 @@
     let weatherWindFrameKey = "";
     const activeVectorTiles = new Set();
     const activeRasterTiles = new Set();
+    const activeWeatherRasterTiles = new Set();
     const roadTileCache = new Map();
     const segmentDetailCache = new Map();
     const weatherFrameCache = new Map();
@@ -246,6 +282,7 @@
       } else {
         updateRasterTiles();
       }
+      updateWeatherRasterTiles();
       scheduleWeatherOverlayUpdate();
     };
 
@@ -307,8 +344,7 @@
       return ((x % n) + n) % n;
     };
 
-    const normalizeRoadTileRequest = (coord, zoom) => {
-      const sourceZoomMax = Number(cfg.tile_zoom_max || 11);
+    const normalizeRoadTileRequest = (coord, zoom, sourceZoomMax = Number(cfg.tile_zoom_max || 11)) => {
       const sourceZoom = Math.min(zoom, sourceZoomMax);
       if (zoom <= sourceZoomMax) {
         return {
@@ -449,8 +485,26 @@
       timelinePhasesNode.style.background = timelineGradientFromValues(riskValues);
     };
 
-    const rgbaCss = (triplet, alpha) =>
-      `rgba(${triplet[0]}, ${triplet[1]}, ${triplet[2]}, ${clamp(Number(alpha) || 0, 0, 1).toFixed(3)})`;
+    const ensureWeatherOverlayData = async () => {
+      if (weatherOverlayData) return weatherOverlayData;
+      if (weatherOverlayPromise) return weatherOverlayPromise;
+      weatherOverlayPromise = fetch('/weather-overlay/meta', { cache: 'no-store' })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(`Weather overlay request failed: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then((payload) => {
+          weatherOverlayData = payload;
+          return payload;
+        })
+        .catch((err) => {
+          weatherOverlayPromise = null;
+          throw err;
+        });
+      return weatherOverlayPromise;
+    };
 
     const weatherFieldRadiusForZoom = (zoom) => {
       const value = Number(zoom || 5);
@@ -463,43 +517,10 @@
       return 124;
     };
 
-    const weatherFieldColorForTemp = (tempC) => {
-      const stops = [
-        [-20, [28, 91, 215]],
-        [-5, [65, 149, 241]],
-        [8, [102, 205, 255]],
-        [18, [242, 211, 82]],
-        [28, [242, 139, 55]],
-        [40, [203, 43, 39]],
-      ];
-      const value = Number(tempC || 0);
-      if (value <= stops[0][0]) return stops[0][1];
-      for (let idx = 1; idx < stops.length; idx += 1) {
-        if (value <= stops[idx][0]) {
-          const [startTemp, startColor] = stops[idx - 1];
-          const [endTemp, endColor] = stops[idx];
-          const t = clamp((value - startTemp) / Math.max(0.000001, endTemp - startTemp), 0, 1);
-          return [
-            lerp(startColor[0], endColor[0], t),
-            lerp(startColor[1], endColor[1], t),
-            lerp(startColor[2], endColor[2], t),
-          ];
-        }
-      }
-      return stops[stops.length - 1][1];
-    };
-
     const weatherFieldAlpha = (precipPct, wetHour) => {
       const certainty = clamp(Math.max(Number(precipPct || 0) / 100.0, Number(wetHour || 0) * 0.45), 0, 1);
       if (!(certainty > 0.02)) return 0;
       return clamp(Math.pow(certainty, 0.92) * 0.94, 0.06, 0.96);
-    };
-
-    const weatherFieldAlphaForTemperature = (tempC) => {
-      const value = Number(tempC);
-      if (!Number.isFinite(value)) return 0;
-      const distanceFromMild = Math.abs(value - 16.0);
-      return clamp(0.18 + Math.min(1, distanceFromMild / 24.0) * 0.52, 0.18, 0.7);
     };
 
     const weatherHeatGradient = (mode) => {
@@ -525,25 +546,11 @@
       ];
     };
 
-    const ensureWeatherOverlayData = async () => {
-      if (weatherOverlayData) return weatherOverlayData;
-      if (weatherOverlayPromise) return weatherOverlayPromise;
-      weatherOverlayPromise = fetch('/weather-overlay/meta', { cache: 'no-store' })
-        .then((response) => {
-          if (!response.ok) {
-            throw new Error(`Weather overlay request failed: ${response.status}`);
-          }
-          return response.json();
-        })
-        .then((payload) => {
-          weatherOverlayData = payload;
-          return payload;
-        })
-        .catch((err) => {
-          weatherOverlayPromise = null;
-          throw err;
-        });
-      return weatherOverlayPromise;
+    const clearWeatherFieldOverlays = () => {
+      [weatherFieldBase, weatherFieldNext].forEach((overlay) => {
+        if (overlay) overlay.setMap(null);
+      });
+      weatherFieldFrameKey = "";
     };
 
     const normalizeDegrees = (degrees) => {
@@ -564,18 +571,18 @@
 
     const windColorForSpeed = (speedMps) => {
       const t = clamp(Number(speedMps || 0) / 18.0, 0, 1);
-      const start = [38, 132, 255];
-      const mid = [82, 196, 139];
-      const end = [242, 139, 55];
-      if (t <= 0.55) {
-        const local = t / 0.55;
+      const start = [255, 232, 184];
+      const mid = [245, 158, 11];
+      const end = [154, 52, 18];
+      if (t <= 0.5) {
+        const local = t / 0.5;
         return rgbCss([
           lerp(start[0], mid[0], local),
           lerp(start[1], mid[1], local),
           lerp(start[2], mid[2], local),
         ]);
       }
-      const local = (t - 0.55) / 0.45;
+      const local = (t - 0.5) / 0.5;
       return rgbCss([
         lerp(mid[0], end[0], local),
         lerp(mid[1], end[1], local),
@@ -583,101 +590,8 @@
       ]);
     };
 
-    const windScaleForSpeed = (speedMps, zoom) =>
-      clamp(3.8 + Number(speedMps || 0) * 0.22 + Math.max(0, (Number(zoom || 5) - 5) * 0.08), 3.8, 9.5);
-
-    const createCanvasOverlay = (drawFn, zIndex = 4) => {
-      class CanvasOverlay extends google.maps.OverlayView {
-        constructor() {
-          super();
-          this.div = null;
-          this.canvas = null;
-          this.visible = false;
-          this.opacity = 0;
-          this.state = null;
-        }
-
-        onAdd() {
-          this.div = document.createElement('div');
-          this.div.style.position = 'absolute';
-          this.div.style.inset = '0';
-          this.div.style.pointerEvents = 'none';
-          this.div.style.zIndex = String(zIndex);
-
-          this.canvas = document.createElement('canvas');
-          this.canvas.style.width = '100%';
-          this.canvas.style.height = '100%';
-          this.canvas.style.display = 'block';
-          this.div.appendChild(this.canvas);
-
-          this.getPanes().overlayLayer.appendChild(this.div);
-          this.div.style.display = this.visible ? 'block' : 'none';
-          this.div.style.opacity = String(this.opacity);
-          if (this.state) {
-            this.draw();
-          }
-        }
-
-        draw() {
-          if (!this.div || !this.canvas) return;
-          const mapDiv = this.getMap()?.getDiv();
-          const projection = this.getProjection();
-          if (!mapDiv || !projection) return;
-          const width = Math.max(1, mapDiv.clientWidth);
-          const height = Math.max(1, mapDiv.clientHeight);
-          const dpr = window.devicePixelRatio || 1;
-          if (this.canvas.width !== Math.round(width * dpr) || this.canvas.height !== Math.round(height * dpr)) {
-            this.canvas.width = Math.round(width * dpr);
-            this.canvas.height = Math.round(height * dpr);
-          }
-          const ctx = this.canvas.getContext('2d');
-          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          ctx.clearRect(0, 0, width, height);
-          this.div.style.display = this.visible ? 'block' : 'none';
-          this.div.style.opacity = String(this.opacity);
-          if (!this.visible || !this.state) return;
-          drawFn(ctx, projection, width, height, this.state);
-        }
-
-        onRemove() {
-          if (this.div?.parentNode) this.div.parentNode.removeChild(this.div);
-          this.div = null;
-          this.canvas = null;
-        }
-
-        setState(state, opacity = this.opacity, visible = true) {
-          this.state = state;
-          this.opacity = opacity;
-          this.visible = visible;
-          this.draw();
-        }
-
-        setOpacity(opacity) {
-          this.opacity = opacity;
-          if (this.div) this.div.style.opacity = String(opacity);
-        }
-
-        setVisible(visible) {
-          this.visible = visible;
-          if (this.div) this.div.style.display = visible ? 'block' : 'none';
-        }
-
-        redraw() {
-          this.draw();
-        }
-      }
-
-      const overlay = new CanvasOverlay();
-      overlay.setMap(map);
-      return overlay;
-    };
-
-    const clearWeatherFieldOverlays = () => {
-      [weatherFieldBase, weatherFieldNext].forEach((overlay) => {
-        if (overlay) overlay.setMap(null);
-      });
-      weatherFieldFrameKey = '';
-    };
+    const windMarkerScaleForZoom = (zoom) =>
+      clamp(4.4 + Math.max(0, (Number(zoom || 5) - 5) * 0.1), 4.4, 6.0);
 
     const clearWeatherWindOverlay = () => {
       weatherWindOverlay.forEach((marker) => marker.setMap(null));
@@ -755,8 +669,8 @@
             lat: Number(station.lat),
             lon: Number(station.lon),
             headingDeg: normalizeDegrees(direction + 180),
-            scale: windScaleForSpeed(speed, map?.getZoom() || 5),
-            alpha: clamp(0.42 + speed / 20.0, 0.42, 0.94),
+            scale: windMarkerScaleForZoom(map?.getZoom() || 5),
+            alpha: 0.9,
             color: windColorForSpeed(speed),
           };
         })
@@ -766,70 +680,57 @@
 
     const updateWeatherOverlay = async () => {
       if (!map || !layerWeatherToggle) return;
-      if (!cfg.weather_overlay_ready || !layerWeatherToggle.checked) {
-        clearWeatherFieldOverlays();
+      clearWeatherFieldOverlays();
+      if (!weatherWindEnabled()) {
         clearWeatherWindOverlay();
+        updateStatus("");
+        return;
+      }
+      if (!cfg.weather_overlay_ready) {
+        clearWeatherWindOverlay();
+        updateStatus("Weather overlay metadata is not ready yet.", true);
         return;
       }
       try {
         const payload = await ensureWeatherOverlayData();
         const { baseFrameIdx, nextFrameIdx, mixValue } = getFrameBlend();
         const zoomKey = Math.round(map.getZoom() || 0);
-        const weatherMode = weatherModeSelect?.value || "precipitation";
-
-        if (weatherMode === "wind") {
-          clearWeatherFieldOverlays();
-          const stations = Array.isArray(payload?.stations) ? payload.stations : [];
-          const hasDirections = stations.some((station) => Array.isArray(station?.wind_dir_deg));
-          if (!hasDirections) {
-            updateStatus('Wind arrows will appear after the next forecast refresh writes wind directions.', true);
-            clearWeatherWindOverlay();
-            return;
-          }
-          ensureWeatherWindOverlay();
-          const frameKey = `${baseFrameIdx}:${nextFrameIdx}:${mixValue.toFixed(3)}:${zoomKey}`;
-          if (weatherWindFrameKey !== frameKey) {
-            const state = buildWindOverlayState(payload);
-            state.arrows.forEach((arrow, idx) => {
-              const icon = {
-                path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                scale: arrow.scale,
-                rotation: arrow.headingDeg,
-                fillColor: arrow.color,
-                fillOpacity: arrow.alpha,
-                strokeColor: arrow.color,
-                strokeOpacity: arrow.alpha,
-                strokeWeight: 1.2,
-              };
-              if (!weatherWindOverlay[idx]) {
-                weatherWindOverlay[idx] = new google.maps.Marker({
-                  clickable: false,
-                  zIndex: 4,
-                });
-              }
-              weatherWindOverlay[idx].setPosition({ lat: arrow.lat, lng: arrow.lon });
-              weatherWindOverlay[idx].setIcon(icon);
-              weatherWindOverlay[idx].setMap(map);
-            });
-            for (let idx = state.arrows.length; idx < weatherWindOverlay.length; idx += 1) {
-              weatherWindOverlay[idx].setMap(null);
-            }
-            weatherWindFrameKey = frameKey;
-          }
-        } else {
+        const stations = Array.isArray(payload?.stations) ? payload.stations : [];
+        const hasDirections = stations.some((station) => Array.isArray(station?.wind_dir_deg));
+        if (!hasDirections) {
+          updateStatus('Wind arrows will appear after the next forecast refresh writes wind directions.', true);
           clearWeatherWindOverlay();
-          ensureWeatherFieldOverlays();
-          const frameKey = `${weatherMode}:${baseFrameIdx}:${nextFrameIdx}:${zoomKey}`;
-          const radius = weatherFieldRadiusForZoom(zoomKey);
-          const gradient = weatherHeatGradient(weatherMode);
-          const nextOpacity = nextFrameIdx === baseFrameIdx ? 0 : mixValue;
-          weatherFieldBase.setOptions({ map, radius, gradient, opacity: 1 - nextOpacity });
-          weatherFieldNext.setOptions({ map: nextFrameIdx === baseFrameIdx ? null : map, radius, gradient, opacity: nextOpacity });
-          if (weatherFieldFrameKey !== frameKey) {
-            weatherFieldBase.setData(buildWeatherFieldFrame(payload, baseFrameIdx, weatherMode));
-            weatherFieldNext.setData(buildWeatherFieldFrame(payload, nextFrameIdx, weatherMode));
-            weatherFieldFrameKey = frameKey;
+          return;
+        }
+        ensureWeatherWindOverlay();
+        const frameKey = `${baseFrameIdx}:${nextFrameIdx}:${mixValue.toFixed(3)}:${zoomKey}`;
+        if (weatherWindFrameKey !== frameKey) {
+          const state = buildWindOverlayState(payload);
+          state.arrows.forEach((arrow, idx) => {
+            const icon = {
+              path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+              scale: arrow.scale,
+              rotation: arrow.headingDeg,
+              fillColor: arrow.color,
+              fillOpacity: arrow.alpha,
+              strokeColor: arrow.color,
+              strokeOpacity: arrow.alpha,
+              strokeWeight: 1.2,
+            };
+            if (!weatherWindOverlay[idx]) {
+              weatherWindOverlay[idx] = new google.maps.Marker({
+                clickable: false,
+                zIndex: 4,
+              });
+            }
+            weatherWindOverlay[idx].setPosition({ lat: arrow.lat, lng: arrow.lon });
+            weatherWindOverlay[idx].setIcon(icon);
+            weatherWindOverlay[idx].setMap(map);
+          });
+          for (let idx = state.arrows.length; idx < weatherWindOverlay.length; idx += 1) {
+            weatherWindOverlay[idx].setMap(null);
           }
+          weatherWindFrameKey = frameKey;
         }
 
         updateStatus('');
@@ -849,8 +750,13 @@
       updateWeatherOverlay();
     };
 
+    const needsScheduledWeatherOverlay = () =>
+      Boolean(map) &&
+      weatherWindEnabled() &&
+      Boolean(cfg.weather_overlay_ready);
+
     const scheduleWeatherOverlayUpdate = () => {
-      if (!map || !layerWeatherToggle?.checked) return;
+      if (!needsScheduledWeatherOverlay()) return;
       if (weatherOverlayRaf) return;
       weatherOverlayRaf = requestAnimationFrame(runScheduledWeatherOverlayUpdate);
     };
@@ -1098,6 +1004,104 @@
       activeRasterTiles.forEach((tile) => updateRasterTile(tile));
     };
 
+    const weatherRasterTileUrl = (mode, frameIdx, zoom, x, y) =>
+      `/weather-raster-tiles/${encodeURIComponent(mode)}/${frameIdx}/${zoom}/${wrapTileX(x, zoom)}/${y}.png?rev=${encodeURIComponent(cfg.weather_tile_revision || cfg.road_tile_revision || "current")}`;
+
+    const ensureWeatherRasterImageFrame = (img, mode, frameIdx, zoom, x, y) => {
+      const targetKey = `${mode}:${frameIdx}:${zoom}:${wrapTileX(x, zoom)}:${y}`;
+      if (img.dataset.frameKey === targetKey) return;
+      img.dataset.frameKey = targetKey;
+      img.src = weatherRasterTileUrl(mode, frameIdx, zoom, x, y);
+    };
+
+    const drawWeatherRasterImage = (ctx, img, request) => {
+      if (!ctx || !img?.complete || !img.naturalWidth) return false;
+      ctx.drawImage(
+        img,
+        -request.drawOffsetX,
+        -request.drawOffsetY,
+        256 * request.drawScale,
+        256 * request.drawScale,
+      );
+      return true;
+    };
+
+    const ensureWeatherRasterBuffers = (tile) => {
+      if (tile.baseBuffer && tile.nextBuffer) return;
+      const ownerDocument = tile.canvas?.ownerDocument || document;
+      tile.baseBuffer = ownerDocument.createElement("canvas");
+      tile.nextBuffer = ownerDocument.createElement("canvas");
+      tile.baseBuffer.width = 256;
+      tile.baseBuffer.height = 256;
+      tile.nextBuffer.width = 256;
+      tile.nextBuffer.height = 256;
+      tile.baseBufferCtx = tile.baseBuffer.getContext("2d", { willReadFrequently: true });
+      tile.nextBufferCtx = tile.nextBuffer.getContext("2d", { willReadFrequently: true });
+    };
+
+    const repaintWeatherRasterTile = (tile) => {
+      if (!tile?.ctx) return;
+      tile.ctx.clearRect(0, 0, 256, 256);
+      if (!drawWeatherRasterImage(tile.ctx, tile.baseImg, tile.request)) {
+        return;
+      }
+      const sameFrame = tile.baseFrameIdx === tile.nextFrameIdx;
+      if (sameFrame || !(tile.mixValue > 0) || !tile.nextImg?.complete || !tile.nextImg.naturalWidth) {
+        return;
+      }
+      ensureWeatherRasterBuffers(tile);
+      tile.baseBufferCtx.clearRect(0, 0, 256, 256);
+      tile.nextBufferCtx.clearRect(0, 0, 256, 256);
+      drawWeatherRasterImage(tile.baseBufferCtx, tile.baseImg, tile.request);
+      drawWeatherRasterImage(tile.nextBufferCtx, tile.nextImg, tile.request);
+      const basePixels = tile.baseBufferCtx.getImageData(0, 0, 256, 256);
+      const nextPixels = tile.nextBufferCtx.getImageData(0, 0, 256, 256);
+      const output = tile.ctx.createImageData(256, 256);
+      const mixValue = clamp(Number(tile.mixValue || 0), 0, 1);
+      const invMix = 1 - mixValue;
+      for (let idx = 0; idx < output.data.length; idx += 1) {
+        output.data[idx] = Math.round(basePixels.data[idx] * invMix + nextPixels.data[idx] * mixValue);
+        output.data[idx + 1] = Math.round(basePixels.data[idx + 1] * invMix + nextPixels.data[idx + 1] * mixValue);
+        output.data[idx + 2] = Math.round(basePixels.data[idx + 2] * invMix + nextPixels.data[idx + 2] * mixValue);
+        output.data[idx + 3] = Math.round(basePixels.data[idx + 3] * invMix + nextPixels.data[idx + 3] * mixValue);
+      }
+      tile.ctx.putImageData(output, 0, 0);
+    };
+
+    const updateWeatherRasterTile = (tile) => {
+      if (!tile) return;
+      const { baseFrameIdx, nextFrameIdx, mixValue } = getFrameBlend();
+      if (Number(tile.nextImg.dataset.frame) === baseFrameIdx) {
+        [tile.baseImg, tile.nextImg] = [tile.nextImg, tile.baseImg];
+      }
+      tile.baseImg.dataset.frame = String(baseFrameIdx);
+      tile.nextImg.dataset.frame = String(nextFrameIdx);
+      tile.baseFrameIdx = baseFrameIdx;
+      tile.nextFrameIdx = nextFrameIdx;
+      tile.mixValue = nextFrameIdx === baseFrameIdx ? 0 : mixValue;
+      ensureWeatherRasterImageFrame(
+        tile.baseImg,
+        tile.weatherMode,
+        baseFrameIdx,
+        tile.request.sourceZoom,
+        tile.request.sourceX,
+        tile.request.sourceY,
+      );
+      ensureWeatherRasterImageFrame(
+        tile.nextImg,
+        tile.weatherMode,
+        nextFrameIdx,
+        tile.request.sourceZoom,
+        tile.request.sourceX,
+        tile.request.sourceY,
+      );
+      repaintWeatherRasterTile(tile);
+    };
+
+    const updateWeatherRasterTiles = () => {
+      activeWeatherRasterTiles.forEach((tile) => updateWeatherRasterTile(tile));
+    };
+
     const fetchRoadTileData = async (request) => {
       const cacheKey = `${cfg.road_tile_revision || "current"}:${request.sourceZoom}:${request.sourceX}:${request.sourceY}`;
       const cached = roadTileCache.get(cacheKey);
@@ -1237,6 +1241,37 @@
       }, delay);
     };
 
+    const syncOverlayMapTypes = () => {
+      if (!map) return;
+      const desired = [];
+      if (cfg.road_mode && layerRiskToggle?.checked) {
+        desired.push(roadOverlay);
+      }
+      const showWeatherRaster =
+        weatherPrecipEnabled() &&
+        Boolean(cfg.weather_raster_ready);
+      if (showWeatherRaster) {
+        if (!weatherRasterOverlay || weatherRasterMode !== "precipitation") {
+          weatherRasterOverlay = createWeatherRasterTileLayer("precipitation");
+          weatherRasterMode = "precipitation";
+        }
+        desired.push(weatherRasterOverlay);
+      } else {
+        weatherRasterMode = "";
+      }
+
+      for (let idx = 0; idx < desired.length; idx += 1) {
+        if (map.overlayMapTypes.getLength() <= idx) {
+          map.overlayMapTypes.push(desired[idx]);
+        } else if (map.overlayMapTypes.getAt(idx) !== desired[idx]) {
+          map.overlayMapTypes.setAt(idx, desired[idx]);
+        }
+      }
+      while (map.overlayMapTypes.getLength() > desired.length) {
+        map.overlayMapTypes.removeAt(map.overlayMapTypes.getLength() - 1);
+      }
+    };
+
     const createRoadTileLayer = () => ({
       alt: "Road Risk",
       name: "Road Risk",
@@ -1310,6 +1345,51 @@
       },
     });
 
+    const createWeatherRasterTileLayer = (mode) => ({
+      alt: "Weather Overlay",
+      name: `Weather ${mode}`,
+      tileSize: new google.maps.Size(256, 256),
+      minZoom: Number(cfg.raster_zoom_min || 4),
+      maxZoom: 20,
+      getTile: (coord, zoom, ownerDocument) => {
+        const request = normalizeRoadTileRequest(coord, zoom, Number(cfg.raster_zoom_max || roadRasterMaxZoom));
+        const canvas = ownerDocument.createElement("canvas");
+        canvas.width = 256;
+        canvas.height = 256;
+        canvas.className = "road-risk-raster-image";
+        const baseImg = ownerDocument.createElement("img");
+        const nextImg = ownerDocument.createElement("img");
+        [baseImg, nextImg].forEach((img) => {
+          img.width = 256;
+          img.height = 256;
+          img.alt = "";
+          img.decoding = "async";
+        });
+        const tile = {
+          mode: "weather-raster",
+          weatherMode: String(mode),
+          canvas,
+          ctx: canvas.getContext("2d"),
+          coord: { x: coord.x, y: coord.y },
+          zoom,
+          request,
+          baseImg,
+          nextImg,
+        };
+        baseImg.addEventListener("load", () => repaintWeatherRasterTile(tile));
+        nextImg.addEventListener("load", () => repaintWeatherRasterTile(tile));
+        canvas.__weatherTile = tile;
+        activeWeatherRasterTiles.add(tile);
+        updateWeatherRasterTile(tile);
+        return canvas;
+      },
+      releaseTile: (node) => {
+        const tile = node?.__weatherTile;
+        if (!tile) return;
+        activeWeatherRasterTiles.delete(tile);
+      },
+    });
+
     const baseMapStyles = [
       { featureType: "poi", stylers: [{ visibility: "off" }] },
       { featureType: "transit", stylers: [{ visibility: "off" }] },
@@ -1344,22 +1424,20 @@
     const installOverlay = () => {
       if (!map || !cfg.road_mode) return;
       applyMapStyles();
-      if (!layerRiskToggle?.checked) {
-        map.overlayMapTypes.clear();
-        updateTimelineHeat(null);
-        return;
-      }
-      if (map.overlayMapTypes.getLength() === 0) {
-        map.overlayMapTypes.push(roadOverlay);
-      }
-      if (map.getZoom() > roadRasterMaxZoom) {
-        scheduleVectorRepaint();
+      syncOverlayMapTypes();
+      if (layerRiskToggle?.checked) {
+        if (map.getZoom() > roadRasterMaxZoom) {
+          scheduleVectorRepaint();
+        } else {
+          updateRasterTiles();
+        }
+        updateZoomHint();
+        scheduleTimelineHeatRefresh(80);
       } else {
-        updateRasterTiles();
+        updateTimelineHeat(null);
       }
-      updateZoomHint();
       updateStatus("");
-      scheduleTimelineHeatRefresh(80);
+      updateWeatherRasterTiles();
     };
 
     const hitTestRoad = (latLng) => {
@@ -1558,7 +1636,7 @@
         updateStatus("GMAPS_API_KEY is required.", true);
         return;
       }
-      if (window.google && window.google.maps) {
+      if (window.google?.maps) {
         initGoogleMap();
         return;
       }
@@ -1568,7 +1646,7 @@
         initGoogleMap();
       };
       const script = document.createElement("script");
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${cfg.api_key}&callback=${callbackName}&v=weekly&libraries=visualization`;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${cfg.api_key}&callback=${callbackName}&v=weekly`;
       script.async = true;
       script.defer = true;
       script.onerror = () => {
@@ -1586,15 +1664,25 @@
       installOverlay();
     });
     layerWeatherToggle?.addEventListener("change", () => {
-      if (!layerWeatherToggle.checked) {
-        clearWeatherFieldOverlays();
-        clearWeatherWindOverlay();
+      const enabled = Boolean(layerWeatherToggle.checked);
+      if (layerWeatherPrecipToggle && cfg.weather_raster_ready) {
+        layerWeatherPrecipToggle.checked = enabled;
       }
+      if (layerWeatherWindToggle && cfg.weather_overlay_ready) {
+        layerWeatherWindToggle.checked = enabled;
+      }
+      if (!enabled) clearWeatherWindOverlay();
+      updateWeatherUi();
+      installOverlay();
       scheduleWeatherOverlayUpdate();
     });
-    weatherModeSelect?.addEventListener("change", () => {
-      clearWeatherFieldOverlays();
+    layerWeatherPrecipToggle?.addEventListener("change", () => {
+      updateWeatherUi();
+      installOverlay();
+    });
+    layerWeatherWindToggle?.addEventListener("change", () => {
       clearWeatherWindOverlay();
+      updateWeatherUi();
       scheduleWeatherOverlayUpdate();
     });
     layerRoadsToggle?.addEventListener("change", () => {
@@ -1604,6 +1692,7 @@
     renderTimelineScaffold();
     renderFreshness();
     updateTimeline();
+    updateWeatherUi();
     loadGoogleMaps();
     return [];
   };

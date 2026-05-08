@@ -62,10 +62,12 @@ from road_tiles import (
     load_road_tile_meta,
     load_weather_overlay,
     load_raster_tile_png,
+    load_weather_raster_tile_png,
     load_tile_payload,
     raster_tile_assets_ready,
     road_tile_assets_ready,
     weather_overlay_assets_ready,
+    weather_raster_assets_ready,
 )
 from segment_runtime import load_segment_runtime, score_segments_in_bbox
 from scripts.common import ROAD_SEGMENTS_PATH
@@ -674,6 +676,8 @@ def _page_config() -> dict[str, object]:
         "forecast_end_utc": str(road_meta.get("forecast_end_utc", "")),
         "provider_label": str(road_meta.get("provider", "nws")).upper(),
         "weather_overlay_ready": bool(weather_overlay_assets_ready()),
+        "weather_raster_ready": bool(weather_raster_assets_ready()),
+        "weather_tile_revision": str(road_meta.get("run_id", "")),
         "timeline": _road_timeline(len(frames)) if road_mode else _timeline(),
         "road_mode": road_mode,
         "default_frame_idx": 0,
@@ -797,14 +801,14 @@ def _map_page_content() -> str:
               <input id="layer-weather" type="checkbox">
               <span>Weather overlay</span>
             </label>
-            <div class="weather-mode-group">
-              <label class="weather-mode-label" for="weather-mode">Weather mode</label>
-              <select id="weather-mode" class="weather-mode-select">
-                <option value="precipitation">Precipitation</option>
-                <option value="temperature">Temperature</option>
-                <option value="wind">Wind</option>
-              </select>
-            </div>
+            <label class="layer-toggle layer-toggle-subtle">
+              <input id="layer-weather-precip" type="checkbox">
+              <span>Precipitation</span>
+            </label>
+            <label class="layer-toggle layer-toggle-subtle">
+              <input id="layer-weather-wind" type="checkbox">
+              <span>Wind</span>
+            </label>
             <label class="layer-toggle">
               <input id="layer-roads" type="checkbox" checked>
               <span>Google roads</span>
@@ -817,6 +821,28 @@ def _map_page_content() -> str:
             <div class="legend-row"><span class="legend-swatch moderate"></span><span>Elevated</span></div>
             <div class="legend-row"><span class="legend-swatch high"></span><span>High</span></div>
             <div class="legend-row"><span class="legend-swatch severe"></span><span>Severe</span></div>
+          </div>
+
+          <div id="weather-legend" class="side-section weather-legend" hidden>
+            <div class="side-title">Weather legend</div>
+            <div id="weather-legend-precip" class="weather-legend-group" hidden>
+              <div class="weather-legend-title">Precipitation</div>
+              <div class="weather-legend-bar weather-legend-bar-precipitation"></div>
+              <div class="weather-legend-labels">
+                <span>Low</span>
+                <span>High</span>
+              </div>
+              <div class="help-copy">Raster forecast tiles where darker blue means stronger wetness probability.</div>
+            </div>
+            <div id="weather-legend-wind" class="weather-legend-group" hidden>
+              <div class="weather-legend-title">Wind</div>
+              <div class="weather-legend-bar weather-legend-bar-wind"></div>
+              <div class="weather-legend-labels">
+                <span>Light</span>
+                <span>Strong</span>
+              </div>
+              <div class="help-copy">Live station arrows from the hourly forecast feed. Direction is heading; amber intensity shows speed.</div>
+            </div>
           </div>
 
           <div class="side-section">
@@ -1523,6 +1549,7 @@ def health() -> dict[str, object]:
         "road_tiles_ready": road_tile_assets_ready(),
         "road_raster_tiles_ready": raster_tile_assets_ready(),
         "weather_overlay_ready": weather_overlay_assets_ready(),
+        "weather_raster_tiles_ready": weather_raster_assets_ready(),
         "road_tiles_generated_at_utc": road_tile_meta.get("generated_at_utc"),
         "live_providers": [
             {
@@ -1912,6 +1939,25 @@ def segment_raster_tile(frame_idx: int, z: int, x: int, y: int) -> Response:
     if not raster_tile_assets_ready():
         raise HTTPException(status_code=404, detail="road raster tiles are not ready")
     png = load_raster_tile_png(frame_idx=frame_idx, z=z, x=x, y=y)
+    if png is None:
+        blank = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 0))
+        buffer = io.BytesIO()
+        blank.save(buffer, format="PNG")
+        png = buffer.getvalue()
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@api.get("/weather-raster-tiles/{mode}/{frame_idx}/{z}/{x}/{y}.png")
+def weather_raster_tile(mode: str, frame_idx: int, z: int, x: int, y: int) -> Response:
+    if mode not in {"temperature", "precipitation"}:
+        raise HTTPException(status_code=404, detail="unsupported weather raster mode")
+    if not weather_raster_assets_ready():
+        raise HTTPException(status_code=404, detail="weather raster tiles are not ready")
+    png = load_weather_raster_tile_png(mode=mode, frame_idx=frame_idx, z=z, x=x, y=y)
     if png is None:
         blank = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 0))
         buffer = io.BytesIO()
