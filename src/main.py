@@ -1601,7 +1601,7 @@ def live_risk(
         )
     except LiveWeatherProviderError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except requests.HTTPError as exc:
+    except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"weather provider request failed: {exc}") from exc
 
 
@@ -1627,7 +1627,7 @@ def segment_risk(
         )
     except LiveWeatherProviderError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except requests.HTTPError as exc:
+    except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"weather provider request failed: {exc}") from exc
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import requests
 
 
 def load_module():
@@ -153,6 +154,19 @@ def test_live_risk_endpoint_uses_mocked_snapshot(monkeypatch):
     assert payload["live_provider"] == "nws"
     assert payload["weather_source"] == "live_observation"
     assert 0.0 <= payload["risk_score"] <= 1.0
+
+
+def test_live_risk_endpoint_maps_network_errors_to_bad_gateway(monkeypatch):
+    def raise_connection_error(lat: float, lon: float, forecast_hours: int, provider: str):
+        raise requests.ConnectionError("provider unreachable")
+
+    monkeypatch.setattr(MODULE, "fetch_live_weather", raise_connection_error)
+    client = TestClient(MODULE.api)
+
+    response = client.get("/api/live-risk?lat=34.0522&lon=-118.2437")
+
+    assert response.status_code == 502
+    assert "weather provider request failed" in response.json()["detail"]
 
 
 def test_about_and_contact_pages_render():
