@@ -1585,6 +1585,14 @@ def tile(frame_idx: int, z: int, x: int, y: int) -> Response:
     )
 
 
+def _validate_provider(provider: str) -> None:
+    if provider.strip().lower() not in LIVE_PROVIDER_CHOICES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown live weather provider '{provider}'; choose from {LIVE_PROVIDER_CHOICES}",
+        )
+
+
 @api.get("/api/live-risk")
 def live_risk(
     lat: float,
@@ -1592,6 +1600,7 @@ def live_risk(
     forecast_hours: int = 0,
     provider: str = "auto",
 ) -> dict[str, object]:
+    _validate_provider(provider)
     try:
         return predict_traffic_safety_live(
             lat=lat,
@@ -1615,6 +1624,7 @@ def segment_risk(
     provider: str = "auto",
     limit: int = 1500,
 ) -> dict[str, object]:
+    _validate_provider(provider)
     try:
         return score_segments_in_bbox(
             min_lat=min_lat,

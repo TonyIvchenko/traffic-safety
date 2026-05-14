@@ -169,6 +169,26 @@ def test_live_risk_endpoint_maps_network_errors_to_bad_gateway(monkeypatch):
     assert "weather provider request failed" in response.json()["detail"]
 
 
+def test_live_risk_endpoint_rejects_unknown_provider():
+    client = TestClient(MODULE.api)
+
+    response = client.get("/api/live-risk?lat=34.0522&lon=-118.2437&provider=bogus")
+
+    assert response.status_code == 400
+    assert "unknown live weather provider" in response.json()["detail"]
+
+
+def test_segment_risk_endpoint_rejects_unknown_provider():
+    client = TestClient(MODULE.api)
+
+    response = client.get(
+        "/api/segment-risk"
+        "?min_lat=33.9&max_lat=34.2&min_lon=-118.5&max_lon=-118.1&provider=bogus"
+    )
+
+    assert response.status_code == 400
+
+
 def test_about_and_contact_pages_render():
     client = TestClient(MODULE.api)
 
