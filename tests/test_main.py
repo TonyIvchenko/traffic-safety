@@ -55,6 +55,31 @@ def test_predict_traffic_safety_shape_and_values():
     assert "weather" in result
 
 
+def test_predict_traffic_safety_out_of_coverage_keeps_consistent_schema():
+    in_coverage = MODULE.predict_traffic_safety(
+        lat=34.0522,
+        lon=-118.2437,
+        day_of_week=5,
+        hour=17,
+        month=9,
+    )
+    # A point well outside the contiguous-US coverage area maps to no candidate cell.
+    out_of_coverage = MODULE.predict_traffic_safety(
+        lat=0.0,
+        lon=0.0,
+        day_of_week=5,
+        hour=17,
+        month=9,
+    )
+
+    assert out_of_coverage["risk_score"] == 0.0
+    assert out_of_coverage["risk_level"] == "low"
+    assert out_of_coverage["weather_source"] == "climatology"
+    # Out-of-coverage responses must expose the same keys as in-coverage ones.
+    assert set(out_of_coverage.keys()) == set(in_coverage.keys())
+    assert "weather" in out_of_coverage
+
+
 def test_map_html_uses_local_static_assets():
     html = MODULE._map_html()
 

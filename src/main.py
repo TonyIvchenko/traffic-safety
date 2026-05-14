@@ -575,24 +575,11 @@ def predict_traffic_safety(
     cell_id = h3.latlng_to_cell(float(lat), float(lon), resolution)
     idx = CELL_INDEX.get(cell_id)
 
-    if idx is None:
-        return {
-            "model_version": MODEL_VERSION,
-            "cell_id": cell_id,
-            "lat": float(lat),
-            "lon": float(lon),
-            "local_day_of_week": day_of_week,
-            "local_hour": hour,
-            "month": month,
-            "historical_cell_events": 0,
-            "historical_same_hour_events": 0,
-            "risk_score": 0.0,
-            "risk_level": "low",
-            "weather_source": "climatology",
-        }
-
     hour_of_week = (day_of_week - 1) * 24 + hour
-    default_weather = _default_weather_for_index(idx=idx, hour_of_week=hour_of_week, month=month)
+    if idx is None:
+        default_weather = np.zeros(5, dtype=np.float32)
+    else:
+        default_weather = _default_weather_for_index(idx=idx, hour_of_week=hour_of_week, month=month)
     return _predict_with_weather(
         lat=float(lat),
         lon=float(lon),
