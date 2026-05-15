@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 import os
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -497,7 +498,11 @@ class OpenWeatherWeatherAdapter(BaseLiveWeatherAdapter):
         )
 
 
+@lru_cache(maxsize=1)
 def provider_registry() -> dict[str, BaseLiveWeatherAdapter]:
+    # Adapters are stateless and read environment flags/keys on each call, so a
+    # single shared instance per provider is safe and avoids rebuilding them on
+    # every request.
     return {
         "nws": NWSWeatherAdapter(),
         "tomorrow": TomorrowIoWeatherAdapter(),
