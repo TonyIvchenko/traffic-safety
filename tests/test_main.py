@@ -214,6 +214,16 @@ def test_segment_risk_endpoint_rejects_unknown_provider():
     assert response.status_code == 400
 
 
+def test_live_risk_endpoint_rejects_out_of_range_forecast_hours():
+    client = TestClient(MODULE.api)
+
+    too_far = client.get("/api/live-risk?lat=34.0522&lon=-118.2437&forecast_hours=999")
+    negative = client.get("/api/live-risk?lat=34.0522&lon=-118.2437&forecast_hours=-1")
+
+    assert too_far.status_code == 422
+    assert negative.status_code == 422
+
+
 def test_about_and_contact_pages_render():
     client = TestClient(MODULE.api)
 

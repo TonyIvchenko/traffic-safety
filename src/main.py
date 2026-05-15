@@ -15,7 +15,7 @@ import smtplib
 import sqlite3
 import sys
 
-from fastapi import Body, FastAPI, HTTPException, Request, Response
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -1589,7 +1589,7 @@ def _validate_provider(provider: str) -> None:
 def live_risk(
     lat: float,
     lon: float,
-    forecast_hours: int = 0,
+    forecast_hours: int = Query(0, ge=0, le=48),
     provider: str = "auto",
 ) -> dict[str, object]:
     _validate_provider(provider)
@@ -1612,9 +1612,9 @@ def segment_risk(
     max_lat: float,
     min_lon: float,
     max_lon: float,
-    forecast_hours: int = 0,
+    forecast_hours: int = Query(0, ge=0, le=48),
     provider: str = "auto",
-    limit: int = 1500,
+    limit: int = Query(1500, ge=1, le=5000),
 ) -> dict[str, object]:
     _validate_provider(provider)
     try:
