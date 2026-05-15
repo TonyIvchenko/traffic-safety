@@ -341,6 +341,14 @@ def _colorize(
     return rgba
 
 
+@lru_cache(maxsize=1)
+def _blank_tile_png() -> bytes:
+    blank = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 0))
+    buffer = io.BytesIO()
+    blank.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 @lru_cache(maxsize=40000)
 def _render_tile_png(frame_idx: int, z: int, x: int, y: int) -> bytes:
     frames = OVERLAY["frames"]
@@ -1555,10 +1563,7 @@ def health() -> dict[str, object]:
 @api.get("/tiles/{frame_idx}/{z}/{x}/{y}.png")
 def tile(frame_idx: int, z: int, x: int, y: int) -> Response:
     if z < 0 or z > 12:
-        blank = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 0))
-        buffer = io.BytesIO()
-        blank.save(buffer, format="PNG")
-        return Response(content=buffer.getvalue(), media_type="image/png")
+        return Response(content=_blank_tile_png(), media_type="image/png")
 
     try:
         png = _render_tile_png(frame_idx=frame_idx, z=z, x=x, y=y)
@@ -1937,10 +1942,7 @@ def segment_raster_tile(frame_idx: int, z: int, x: int, y: int) -> Response:
         raise HTTPException(status_code=404, detail="road raster tiles are not ready")
     png = load_raster_tile_png(frame_idx=frame_idx, z=z, x=x, y=y)
     if png is None:
-        blank = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 0))
-        buffer = io.BytesIO()
-        blank.save(buffer, format="PNG")
-        png = buffer.getvalue()
+        png = _blank_tile_png()
     return Response(
         content=png,
         media_type="image/png",
@@ -1956,10 +1958,7 @@ def weather_raster_tile(mode: str, frame_idx: int, z: int, x: int, y: int) -> Re
         raise HTTPException(status_code=404, detail="weather raster tiles are not ready")
     png = load_weather_raster_tile_png(mode=mode, frame_idx=frame_idx, z=z, x=x, y=y)
     if png is None:
-        blank = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 0))
-        buffer = io.BytesIO()
-        blank.save(buffer, format="PNG")
-        png = buffer.getvalue()
+        png = _blank_tile_png()
     return Response(
         content=png,
         media_type="image/png",
