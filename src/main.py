@@ -1531,7 +1531,6 @@ def submit_contact(request: Request, payload: dict[str, object] = Body(...)) -> 
 
 @api.get("/health")
 def health() -> dict[str, object]:
-    segment_model_path = REPO_DIR / "models" / "traffic_safety_segments.joblib"
     road_tile_meta = load_road_tile_meta() if road_tile_assets_ready() else {}
     return {
         "service": SERVICE_NAME,
@@ -1539,7 +1538,7 @@ def health() -> dict[str, object]:
         "frames": len(OVERLAY["frames"]),
         "model_version": MODEL_VERSION,
         "model_ready": bool(MODEL_BUNDLE),
-        "segment_model_ready": bool(segment_model_path.exists()),
+        "segment_model_ready": bool(SEGMENT_MODEL_PATH.exists()),
         "overlay_ready": bool((TILES_DIR / "overlay.npz").exists()),
         "road_tiles_ready": road_tile_assets_ready(),
         "road_raster_tiles_ready": raster_tile_assets_ready(),
