@@ -57,6 +57,19 @@ def load_segment_runtime() -> dict[str, object]:
     }
 
 
+def _climatology_context(target: datetime) -> dict[str, object]:
+    return {
+        "month": target.month,
+        "hour_of_week": target.weekday() * 24 + target.hour,
+        "temp_c": None,
+        "relative_humidity_pct": None,
+        "wind_speed_mps": None,
+        "wet_hour": None,
+        "provider": "climatology",
+        "timestamp_local": target.isoformat(),
+    }
+
+
 def _station_live_contexts(
     station_indices: np.ndarray,
     rep_by_index: pd.DataFrame,
@@ -65,6 +78,14 @@ def _station_live_contexts(
 ) -> dict[int, dict[str, object]]:
     contexts: dict[int, dict[str, object]] = {}
     for station_index in sorted(set(int(v) for v in station_indices.tolist())):
+        if station_index not in rep_by_index.index:
+            # No representative weather station for this segment; fall back to a
+            # neutral climatology context instead of raising a KeyError that
+            # would fail the whole bbox request.
+            contexts[station_index] = _climatology_context(
+                _local_target_time(0, forecast_hours)
+            )
+            continue
         rep = rep_by_index.loc[station_index]
         try:
             snapshot = fetch_live_weather(
@@ -85,16 +106,7 @@ def _station_live_contexts(
             }
         except Exception:
             target = _local_target_time(int(rep.get("utc_offset_hours", 0)), forecast_hours)
-            contexts[station_index] = {
-                "month": target.month,
-                "hour_of_week": target.weekday() * 24 + target.hour,
-                "temp_c": None,
-                "relative_humidity_pct": None,
-                "wind_speed_mps": None,
-                "wet_hour": None,
-                "provider": "climatology",
-                "timestamp_local": target.isoformat(),
-            }
+            contexts[station_index] = _climatology_context(target)
     return contexts
 
 
