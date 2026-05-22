@@ -224,6 +224,16 @@ def test_live_risk_endpoint_rejects_out_of_range_forecast_hours():
     assert negative.status_code == 422
 
 
+def test_live_risk_endpoint_rejects_out_of_range_coordinates():
+    client = TestClient(MODULE.api)
+
+    bad_lat = client.get("/api/live-risk?lat=120.0&lon=-118.2437")
+    bad_lon = client.get("/api/live-risk?lat=34.0522&lon=-200.0")
+
+    assert bad_lat.status_code == 422
+    assert bad_lon.status_code == 422
+
+
 def test_about_and_contact_pages_render():
     client = TestClient(MODULE.api)
 

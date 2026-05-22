@@ -1586,8 +1586,8 @@ def _validate_provider(provider: str) -> None:
 
 @api.get("/api/live-risk")
 def live_risk(
-    lat: float,
-    lon: float,
+    lat: float = Query(..., ge=-90.0, le=90.0),
+    lon: float = Query(..., ge=-180.0, le=180.0),
     forecast_hours: int = Query(0, ge=0, le=48),
     provider: str = "auto",
 ) -> dict[str, object]:
@@ -1607,10 +1607,10 @@ def live_risk(
 
 @api.get("/api/segment-risk")
 def segment_risk(
-    min_lat: float,
-    max_lat: float,
-    min_lon: float,
-    max_lon: float,
+    min_lat: float = Query(..., ge=-90.0, le=90.0),
+    max_lat: float = Query(..., ge=-90.0, le=90.0),
+    min_lon: float = Query(..., ge=-180.0, le=180.0),
+    max_lon: float = Query(..., ge=-180.0, le=180.0),
     forecast_hours: int = Query(0, ge=0, le=48),
     provider: str = "auto",
     limit: int = Query(1500, ge=1, le=5000),
