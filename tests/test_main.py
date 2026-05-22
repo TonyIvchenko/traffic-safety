@@ -234,6 +234,15 @@ def test_live_risk_endpoint_rejects_out_of_range_coordinates():
     assert bad_lon.status_code == 422
 
 
+def test_responses_include_baseline_security_headers():
+    client = TestClient(MODULE.api)
+
+    response = client.get("/health")
+
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+
+
 def test_about_and_contact_pages_render():
     client = TestClient(MODULE.api)
 

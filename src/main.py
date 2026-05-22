@@ -1348,6 +1348,19 @@ api = FastAPI(title=SERVICE_NAME)
 api.add_middleware(GZipMiddleware, minimum_size=1024)
 api.mount(STATIC_URL, StaticFiles(directory=str(STATIC_DIR)), name="traffic-safety-static")
 
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+}
+
+
+@api.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
+
 
 def _utc_label(value: str | None) -> str:
     if not value:
