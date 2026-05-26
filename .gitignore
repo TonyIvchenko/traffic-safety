@@ -11,6 +11,9 @@ __pycache__/
 # Test cache
 .pytest_cache/
 
+# Scratch
+.tmp/
+
 # macOS
 .DS_Store
 
