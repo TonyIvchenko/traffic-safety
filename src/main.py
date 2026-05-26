@@ -1543,7 +1543,8 @@ def submit_contact(request: Request, payload: dict[str, object] = Body(...)) -> 
 
 
 @api.get("/health")
-def health() -> dict[str, object]:
+def health(response: Response) -> dict[str, object]:
+    response.headers["Cache-Control"] = "no-store"
     road_tile_meta = load_road_tile_meta() if road_tile_assets_ready() else {}
     return {
         "service": SERVICE_NAME,
@@ -1599,11 +1600,13 @@ def _validate_provider(provider: str) -> None:
 
 @api.get("/api/live-risk")
 def live_risk(
+    response: Response,
     lat: float = Query(..., ge=-90.0, le=90.0),
     lon: float = Query(..., ge=-180.0, le=180.0),
     forecast_hours: int = Query(0, ge=0, le=48),
     provider: str = "auto",
 ) -> dict[str, object]:
+    response.headers["Cache-Control"] = "no-store"
     _validate_provider(provider)
     try:
         return predict_traffic_safety_live(
@@ -1620,6 +1623,7 @@ def live_risk(
 
 @api.get("/api/segment-risk")
 def segment_risk(
+    response: Response,
     min_lat: float = Query(..., ge=-90.0, le=90.0),
     max_lat: float = Query(..., ge=-90.0, le=90.0),
     min_lon: float = Query(..., ge=-180.0, le=180.0),
@@ -1628,6 +1632,7 @@ def segment_risk(
     provider: str = "auto",
     limit: int = Query(1500, ge=1, le=5000),
 ) -> dict[str, object]:
+    response.headers["Cache-Control"] = "no-store"
     _validate_provider(provider)
     try:
         return score_segments_in_bbox(

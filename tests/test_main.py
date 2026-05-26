@@ -243,6 +243,14 @@ def test_responses_include_baseline_security_headers():
     assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
 
 
+def test_health_response_is_not_cacheable():
+    client = TestClient(MODULE.api)
+
+    response = client.get("/health")
+
+    assert response.headers["cache-control"] == "no-store"
+
+
 def test_about_and_contact_pages_render():
     client = TestClient(MODULE.api)
 
