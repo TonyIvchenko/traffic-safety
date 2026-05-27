@@ -145,6 +145,15 @@ The open stack gets us full-US coverage. The commercial layer improves freshness
 5. Add optional live traffic connectors behind provider-specific adapters.
 6. Serve an overlay tile endpoint.
 
+## Development
+
+Install the runtime and test dependencies, then run the test suite:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
+
 ## Files In This Folder
 
 - [main.py](/Users/toxa/git/traffic-safety/src/main.py)
