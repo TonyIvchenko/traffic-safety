@@ -171,20 +171,6 @@ CELL_INDEX = {
 LIVE_PROVIDER_CHOICES = ["auto", *[status.name for status in provider_statuses()]]
 
 
-def _first_metric(bundle: dict[str, object], keys: list[str]) -> float | None:
-    for key in keys:
-        value = bundle.get(key)
-        if isinstance(value, (int, float)):
-            return float(value)
-    nested_metrics = bundle.get("metrics")
-    if isinstance(nested_metrics, dict):
-        for key in keys:
-            value = nested_metrics.get(key)
-            if isinstance(value, (int, float)):
-                return float(value)
-    return None
-
-
 def _timeline() -> dict[str, object]:
     frame_count = len(OVERLAY["frames"])
     month_value = int(OVERLAY["config"].get("month", 1))
