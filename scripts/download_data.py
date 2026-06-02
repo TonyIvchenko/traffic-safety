@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import requests
@@ -14,12 +15,22 @@ def download_file(url: str, destination: Path, force: bool = False) -> None:
         return
 
     print(f"download {url}")
-    with requests.get(url, stream=True, timeout=120) as response:
-        response.raise_for_status()
-        with destination.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=1 << 20):
-                if chunk:
-                    handle.write(chunk)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Stream into a temporary file and atomically move it into place so an
+    # interrupted download never leaves a truncated file that later runs would
+    # mistake for a complete cache.
+    tmp_path = destination.with_name(destination.name + ".part")
+    try:
+        with requests.get(url, stream=True, timeout=120) as response:
+            response.raise_for_status()
+            with tmp_path.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1 << 20):
+                    if chunk:
+                        handle.write(chunk)
+        os.replace(tmp_path, destination)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
 
 def parse_args() -> argparse.Namespace:
