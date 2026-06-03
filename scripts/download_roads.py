@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 import requests
 
@@ -13,7 +14,15 @@ def download_file(url: str, output_path, force: bool) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     response = requests.get(url, timeout=120)
     response.raise_for_status()
-    output_path.write_bytes(response.content)
+    # Write to a temporary file and atomically replace the destination so an
+    # interrupted write never leaves a truncated shapefile archive behind.
+    tmp_path = output_path.with_name(output_path.name + ".part")
+    try:
+        tmp_path.write_bytes(response.content)
+        os.replace(tmp_path, output_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
     print(f"wrote {output_path}")
 
 
