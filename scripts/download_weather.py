@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -75,7 +76,16 @@ def download_file(url: str, path: Path, force: bool = False) -> None:
     print(f"download {url}")
     response = requests.get(url, timeout=60)
     response.raise_for_status()
-    path.write_bytes(response.content)
+    # Write to a temporary file and atomically replace the destination so an
+    # interrupted download never leaves a truncated archive that later runs
+    # would treat as a complete cache.
+    tmp_path = path.with_name(path.name + ".part")
+    try:
+        tmp_path.write_bytes(response.content)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
 
 def load_station_history(force: bool = False) -> pd.DataFrame:
@@ -314,7 +324,9 @@ def main() -> None:
                 download_file(url, path, force=args.force)
                 hourly = process_station_year(station_row, year, force=args.force)
                 partial_climatology.append(aggregate_climatology(hourly))
-            except requests.HTTPError as exc:
+            except requests.RequestException as exc:
+                # Includes connection errors and timeouts, not just HTTP status
+                # errors, so one unreachable station-year does not abort the run.
                 print(f"skip {station_row['station_id']} {year}: {exc}")
 
     climatology = (
