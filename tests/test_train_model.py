@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -72,3 +73,19 @@ def test_build_weather_cube_fills_gaps_and_uses_defaults():
     assert not np.isnan(cube).any()
     # Wind has no observations anywhere, so it falls back to the provided default.
     assert np.allclose(cube[:, :, :, 3], 7.0)
+
+
+def test_build_weather_cube_does_not_emit_runtime_warnings():
+    # Sparse climatology used to leak "Mean of empty slice" RuntimeWarnings.
+    climatology = _climatology(
+        [
+            {"station_index": 0, "month": 1, "hour_of_week": 5,
+             "temp_c": 10.0, "dewpoint_c": 5.0, "relative_humidity_pct": 60.0,
+             "wind_speed_mps": np.nan, "wet_hour": 0.0},
+        ]
+    )
+    weather_defaults = np.zeros(len(tm.WEATHER_FEATURE_NAMES), dtype=np.float32)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", category=RuntimeWarning)
+        tm.build_weather_cube(climatology, weather_defaults)

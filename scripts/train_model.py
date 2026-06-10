@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 import sys
+import warnings
 
 import joblib
 import numpy as np
@@ -324,7 +325,11 @@ def build_weather_cube(
             dtype=np.float32
         )
 
-    with np.errstate(invalid="ignore"):
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        # Stations with sparse climatology produce all-NaN slices; the means are
+        # simply unused there (the next fallback fills them), so the resulting
+        # "Mean of empty slice" RuntimeWarnings are expected noise.
+        warnings.simplefilter("ignore", category=RuntimeWarning)
         station_month_means = np.nanmean(cube, axis=2, keepdims=True)
         cube = np.where(np.isnan(cube), station_month_means, cube)
         station_means = np.nanmean(cube, axis=(1, 2), keepdims=True)
