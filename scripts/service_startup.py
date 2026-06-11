@@ -3,7 +3,9 @@ from __future__ import annotations
 
 
 def display_http_host(host: str) -> str:
-    return "127.0.0.1" if host in {"", "0.0.0.0"} else host
+    # Bind-all addresses (IPv4 0.0.0.0, IPv6 ::, or empty) are not reachable as
+    # written, so present a loopback address in the clickable startup URL.
+    return "127.0.0.1" if host in {"", "0.0.0.0", "::"} else host
 
 
 def format_service_startup(service_name: str, url: str) -> str:
