@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -57,3 +58,16 @@ def test_build_weather_cube_sizes_station_axis_to_max_index():
     # Station axis spans 0..max(station_index).
     assert cube.shape[0] == 4
     assert cube[3, 1, 10, 0] == pytest.approx(5.0)
+
+
+def test_build_weather_cube_does_not_emit_runtime_warnings():
+    climatology = _climatology(
+        [
+            {"station_index": 0, "month": 1, "hour_of_week": 5,
+             "temp_c": 10.0, "relative_humidity_pct": 60.0,
+             "wind_speed_mps": np.nan, "wet_hour": 0.0},
+        ]
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", category=RuntimeWarning)
+        tsm.build_weather_cube(climatology)
