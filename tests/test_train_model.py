@@ -89,3 +89,48 @@ def test_build_weather_cube_does_not_emit_runtime_warnings():
     with warnings.catch_warnings():
         warnings.simplefilter("error", category=RuntimeWarning)
         tm.build_weather_cube(climatology, weather_defaults)
+
+
+def _candidate_cells() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "cell_id": ["a", "b"],
+            "center_lat": [34.0, 41.0],
+            "center_lon": [-118.0, -87.0],
+            "station_index": [0, 1],
+        }
+    )
+
+
+def test_build_context_summarizes_history_and_geometry():
+    history = pd.DataFrame(
+        {
+            "cell_id": ["a", "a", "b"],
+            "hour_of_week": [5, 5, 10],
+        }
+    )
+
+    context = tm.build_context(history, _candidate_cells())
+
+    assert context.lat_by_cell["a"] == pytest.approx(34.0)
+    assert context.lon_by_cell["b"] == pytest.approx(-87.0)
+    assert context.total_by_cell["a"] == 2
+    assert context.hour_by_cell[("a", 5)] == 2
+    assert context.hour_by_cell[("b", 10)] == 1
+
+
+def test_sample_negatives_is_deterministic_and_well_formed():
+    candidate_cells = _candidate_cells()
+    first = tm.sample_negatives(2022, 50, candidate_cells, np.random.default_rng(7))
+    second = tm.sample_negatives(2022, 50, candidate_cells, np.random.default_rng(7))
+
+    assert len(first) == 50
+    assert list(first.columns) == [
+        "cell_id", "station_index", "month", "day", "hour", "hour_of_week"
+    ]
+    # Same seed -> identical samples.
+    pd.testing.assert_frame_equal(first, second)
+    assert set(first["cell_id"]).issubset({"a", "b"})
+    assert first["hour_of_week"].between(0, 167).all()
+    assert first["month"].between(1, 12).all()
+    assert first["hour"].between(0, 23).all()
