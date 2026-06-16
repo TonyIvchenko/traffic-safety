@@ -122,3 +122,31 @@ def test_build_design_matrix_combines_static_and_temporal_blocks():
     assert np.isfinite(matrix).all()
     # Static block is taken from the rows' segment indices, unchanged.
     assert np.allclose(matrix[:, :3], static_features[[0, 2]])
+
+
+def test_attach_positive_weather_fills_only_missing_values():
+    # Climatology cube: station 0, month 1, hour_of_week 5 -> one value per feature.
+    cube = np.zeros((1, 12, 24 * 7, len(tsm.WEATHER_COLUMNS)), dtype=np.float32)
+    cube[0, 0, 5, :] = [100.0, 200.0, 300.0, 400.0]
+    station_indices = np.array([0, 0], dtype=np.int16)
+    weather_defaults = np.zeros(len(tsm.WEATHER_COLUMNS), dtype=np.float32)
+
+    positives = pd.DataFrame(
+        {
+            "segment_idx": [0, 1],
+            "month": [1, 1],
+            "hour_of_week": [5, 5],
+            "temp_c": [np.nan, 15.0],
+            "relative_humidity_pct": [22.0, np.nan],
+            "wind_speed_mps": [np.nan, 5.0],
+            "wet_hour": [1.0, np.nan],
+        }
+    )
+
+    filled = tsm.attach_positive_weather(positives, station_indices, cube, weather_defaults)
+
+    # Observed values survive; NaNs are replaced by the climatology lookup.
+    assert filled["temp_c"].tolist() == [100.0, 15.0]
+    assert filled["relative_humidity_pct"].tolist() == [22.0, 200.0]
+    assert filled["wind_speed_mps"].tolist() == [300.0, 5.0]
+    assert filled["wet_hour"].tolist() == [1.0, 400.0]
