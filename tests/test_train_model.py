@@ -134,3 +134,48 @@ def test_sample_negatives_is_deterministic_and_well_formed():
     assert first["hour_of_week"].between(0, 167).all()
     assert first["month"].between(1, 12).all()
     assert first["hour"].between(0, 23).all()
+
+
+def _feature_values(base: float) -> dict[str, float]:
+    return {name: base + idx for idx, name in enumerate(tm.WEATHER_FEATURE_NAMES)}
+
+
+def test_prepare_climatology_lookup_prefixes_feature_columns():
+    climatology = pd.DataFrame(
+        [{"station_index": 0, "month": 1, "hour_of_week": 5, **_feature_values(10.0)}]
+    )
+
+    lookup = tm.prepare_climatology_lookup(climatology)
+
+    assert list(lookup.columns) == (
+        tm.WEATHER_CLIMATOLOGY_KEYS + [f"clim_{name}" for name in tm.WEATHER_FEATURE_NAMES]
+    )
+    assert lookup.iloc[0]["clim_temp_c"] == pytest.approx(10.0)
+
+
+def test_attach_weather_features_prefers_exact_then_climatology_then_default():
+    exact_weather = pd.DataFrame(
+        [{"station_index": 0, "month": 1, "day": 2, "hour": 3, **_feature_values(20.0)}]
+    )
+    climatology_lookup = tm.prepare_climatology_lookup(
+        pd.DataFrame(
+            [{"station_index": 0, "month": 1, "hour_of_week": 5, **_feature_values(10.0)}]
+        )
+    )
+    weather_defaults = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32)
+    rows = pd.DataFrame(
+        [
+            {"station_index": 0, "month": 1, "day": 2, "hour": 3, "hour_of_week": 5},  # exact hit
+            {"station_index": 0, "month": 1, "day": 9, "hour": 9, "hour_of_week": 5},  # climatology
+            {"station_index": 0, "month": 1, "day": 9, "hour": 9, "hour_of_week": 99},  # default
+        ]
+    )
+
+    merged, exact_hit_rate = tm.attach_weather_features(
+        rows, exact_weather, climatology_lookup, weather_defaults
+    )
+
+    assert merged["temp_c"].tolist() == [20.0, 10.0, 1.0]
+    assert exact_hit_rate == pytest.approx(1.0 / 3.0)
+    # Helper columns are dropped from the result.
+    assert not [col for col in merged.columns if col.startswith(("exact_", "clim_"))]
