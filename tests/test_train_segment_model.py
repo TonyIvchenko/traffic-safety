@@ -71,3 +71,54 @@ def test_build_weather_cube_does_not_emit_runtime_warnings():
     with warnings.catch_warnings():
         warnings.simplefilter("error", category=RuntimeWarning)
         tsm.build_weather_cube(climatology)
+
+
+def test_sample_negatives_is_deterministic_and_in_range():
+    roads = pd.DataFrame({"segment_idx": np.arange(5, dtype=np.int32)})
+    first = tsm.sample_negatives(roads, 40, 2022, np.random.default_rng(11))
+    second = tsm.sample_negatives(roads, 40, 2022, np.random.default_rng(11))
+
+    assert len(first) == 40
+    assert list(first.columns) == ["segment_idx", "month", "hour_of_week"]
+    pd.testing.assert_frame_equal(first, second)
+    assert first["segment_idx"].between(0, 4).all()
+    assert first["hour_of_week"].between(0, 167).all()
+    assert first["month"].between(1, 12).all()
+
+
+def test_build_context_counts_history():
+    history = pd.DataFrame({"segment_idx": [0, 0, 1], "hour_of_week": [5, 5, 10]})
+
+    context = tsm.build_context(history)
+
+    assert context.total_by_idx[0] == 2
+    assert context.hour_by_idx[(0, 5)] == 2
+    assert context.hour_by_idx[(1, 10)] == 1
+
+
+def test_build_design_matrix_combines_static_and_temporal_blocks():
+    static_features = np.arange(12, dtype=np.float32).reshape(4, 3)
+    context = tsm.SegmentContext(
+        total_by_idx={0: 7, 2: 0},
+        hour_by_idx={(0, 5): 3},
+    )
+    rows = pd.DataFrame(
+        {
+            "segment_idx": [0, 2],
+            "hour_of_week": [5, 40],
+            "month": [1, 6],
+            "temp_c": [10.0, -2.0],
+            "relative_humidity_pct": [60.0, 80.0],
+            "wind_speed_mps": [3.0, 7.0],
+            "wet_hour": [0.0, 1.0],
+        }
+    )
+
+    matrix = tsm.build_design_matrix(rows, static_features, context)
+
+    # 3 static columns + 13 temporal feature columns.
+    assert matrix.shape == (2, 3 + 13)
+    assert matrix.dtype == np.float32
+    assert np.isfinite(matrix).all()
+    # Static block is taken from the rows' segment indices, unchanged.
+    assert np.allclose(matrix[:, :3], static_features[[0, 2]])
