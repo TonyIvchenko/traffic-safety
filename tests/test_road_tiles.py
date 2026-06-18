@@ -95,3 +95,46 @@ def test_iter_tile_paths_emits_encoded_paths_within_tile_grid():
 def test_iter_tile_paths_ignores_degenerate_input():
     assert rt.iter_tile_paths([(-118.0, 34.0)], 10) == []
     assert rt.iter_tile_paths([], 10) == []
+
+
+def _within_tile_box(point, tile_x=0, tile_y=0, tol=1e-6):
+    x, y = point
+    min_x, min_y = tile_x * 256.0, tile_y * 256.0
+    return (min_x - tol <= x <= min_x + 256.0 + tol) and (
+        min_y - tol <= y <= min_y + 256.0 + tol
+    )
+
+
+def test_clip_polyline_keeps_fully_interior_path():
+    world_points = [(50.0, 50.0), (100.0, 100.0), (150.0, 150.0)]
+    paths = rt._clip_polyline_to_tile(world_points, 0, 0)
+    assert paths == [world_points]
+
+
+def test_clip_polyline_drops_fully_exterior_path():
+    world_points = [(300.0, 300.0), (400.0, 400.0)]
+    assert rt._clip_polyline_to_tile(world_points, 0, 0) == []
+
+
+def test_clip_polyline_trims_segment_at_boundary():
+    world_points = [(128.0, 128.0), (400.0, 128.0)]
+    paths = rt._clip_polyline_to_tile(world_points, 0, 0)
+    assert len(paths) == 1
+    assert paths[0][0] == pytest.approx((128.0, 128.0))
+    assert paths[0][-1] == pytest.approx((256.0, 128.0))
+
+
+def test_clip_polyline_splits_when_leaving_and_reentering():
+    world_points = [
+        (50.0, 128.0),   # inside
+        (100.0, 128.0),  # inside
+        (300.0, 400.0),  # outside (down-right)
+        (310.0, 410.0),  # outside -> this segment is fully outside, forcing a break
+        (120.0, 128.0),  # back inside
+        (150.0, 128.0),  # inside
+    ]
+    paths = rt._clip_polyline_to_tile(world_points, 0, 0)
+    assert len(paths) == 2
+    for path in paths:
+        assert len(path) >= 2
+        assert all(_within_tile_box(point) for point in path)
