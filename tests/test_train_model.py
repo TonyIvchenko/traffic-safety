@@ -179,3 +179,27 @@ def test_attach_weather_features_prefers_exact_then_climatology_then_default():
     assert exact_hit_rate == pytest.approx(1.0 / 3.0)
     # Helper columns are dropped from the result.
     assert not [col for col in merged.columns if col.startswith(("exact_", "clim_"))]
+
+
+def test_build_examples_maps_cell_geometry_and_history():
+    history = pd.DataFrame({"cell_id": ["a", "a"], "hour_of_week": [5, 5]})
+    context = tm.build_context(history, _candidate_cells())
+    rows = pd.DataFrame(
+        [
+            {"cell_id": "a", "hour_of_week": 5, "month": 9, **_feature_values(18.0)},
+            {"cell_id": "z", "hour_of_week": 5, "month": 9, **_feature_values(0.0)},  # unknown cell
+        ]
+    )
+
+    features = tm.build_examples(rows, context)
+
+    assert features.shape == (2, 16)
+    # Columns 0/1 are latitude/longitude pulled from the cell geometry lookup.
+    assert features[0, 0] == pytest.approx(34.0)
+    assert features[0, 1] == pytest.approx(-118.0)
+    # Unknown cells fall back to zeroed geometry and history.
+    assert features[1, 0] == pytest.approx(0.0)
+    assert features[1, 1] == pytest.approx(0.0)
+    # Column 8 is log1p(total events for the cell): a has 2, z has 0.
+    assert features[0, 8] == pytest.approx(np.log1p(2.0))
+    assert features[1, 8] == pytest.approx(0.0)
