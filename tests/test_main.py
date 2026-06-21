@@ -169,7 +169,9 @@ def test_live_risk_endpoint_uses_mocked_snapshot(monkeypatch):
         assert forecast_hours == 0
         return snapshot
 
-    monkeypatch.setattr(MODULE, "fetch_live_weather", fake_fetch_live_weather)
+    import predict
+
+    monkeypatch.setattr(predict, "fetch_live_weather", fake_fetch_live_weather)
     client = TestClient(MODULE.api)
 
     response = client.get("/api/live-risk?lat=34.0522&lon=-118.2437&forecast_hours=0")
@@ -185,7 +187,9 @@ def test_live_risk_endpoint_maps_network_errors_to_bad_gateway(monkeypatch):
     def raise_connection_error(lat: float, lon: float, forecast_hours: int, provider: str):
         raise requests.ConnectionError("provider unreachable")
 
-    monkeypatch.setattr(MODULE, "fetch_live_weather", raise_connection_error)
+    import predict
+
+    monkeypatch.setattr(predict, "fetch_live_weather", raise_connection_error)
     client = TestClient(MODULE.api)
 
     response = client.get("/api/live-risk?lat=34.0522&lon=-118.2437")
