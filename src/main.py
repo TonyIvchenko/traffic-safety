@@ -1103,6 +1103,7 @@ api.include_router(
             rate_limit_per_min=(_RATE_LIMITER.rate_per_min if _RATE_LIMITER else None),
             predict_point=predict_traffic_safety,
             predict_point_live=predict_traffic_safety_live,
+            h3_resolution=int(MODEL_BUNDLE.get("resolution", 5)),
         )
     )
 )
