@@ -15,6 +15,7 @@ import sqlite3
 import sys
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -73,6 +74,8 @@ from predict import (
     predict_traffic_safety,
     predict_traffic_safety_live,
 )
+from api_ratelimit import install_rate_limit_middleware, rate_limiter_from_env
+from api_v1 import V1Dependencies, build_v1_router
 
 STATIC_DIR = SRC_DIR / "static"
 STATIC_URL = "/traffic-safety-static"
@@ -1038,7 +1041,16 @@ def _map_bootstrap_js() -> str:
     return "function bootstrapTrafficSafetyMap() {}\n" + script
 
 
-api = FastAPI(title=SERVICE_NAME)
+api = FastAPI(
+    title=SERVICE_NAME,
+    version="1.0.0",
+    description=(
+        "Public road-risk API exposing climatological and live weather-adjusted "
+        "crash risk for points, routes, and map areas across the United States. "
+        "See /v1/docs for the interactive reference."
+    ),
+    openapi_tags=[{"name": "v1", "description": "Public, versioned road-risk endpoints."}],
+)
 api.add_middleware(GZipMiddleware, minimum_size=1024)
 api.mount(STATIC_URL, StaticFiles(directory=str(STATIC_DIR)), name="traffic-safety-static")
 
@@ -1054,6 +1066,46 @@ async def add_security_headers(request: Request, call_next):
     for header, value in SECURITY_HEADERS.items():
         response.headers.setdefault(header, value)
     return response
+
+
+# --- Public /v1 API: CORS, rate limiting, and router wiring ---
+_CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("TRAFFIC_SAFETY_CORS_ORIGINS", "*").split(",")
+    if origin.strip()
+] or ["*"]
+api.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+_RATE_LIMITER = rate_limiter_from_env()
+install_rate_limit_middleware(api, _RATE_LIMITER, path_prefix="/v1")
+
+_v1_overlay_config = OVERLAY["config"]
+api.include_router(
+    build_v1_router(
+        V1Dependencies(
+            service_name=SERVICE_NAME,
+            model_version=MODEL_VERSION,
+            model_ready=bool(MODEL_BUNDLE),
+            coverage={
+                key: float(_v1_overlay_config[key])
+                for key in ("lat_min", "lat_max", "lon_min", "lon_max")
+                if key in _v1_overlay_config
+            },
+            frame_labels=[str(frame) for frame in OVERLAY["frames"]],
+            risk_quantiles=MODEL_BUNDLE.get("risk_quantiles"),
+            provider_statuses=provider_statuses,
+            provider_choices=LIVE_PROVIDER_CHOICES,
+            rate_limit_per_min=(_RATE_LIMITER.rate_per_min if _RATE_LIMITER else None),
+            predict_point=predict_traffic_safety,
+            predict_point_live=predict_traffic_safety_live,
+        )
+    )
+)
 
 
 def _utc_label(value: str | None) -> str:
