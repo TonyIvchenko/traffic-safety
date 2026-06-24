@@ -78,6 +78,11 @@ def test_predict_traffic_safety_out_of_coverage_keeps_consistent_schema():
     # Out-of-coverage responses must expose the same keys as in-coverage ones.
     assert set(out_of_coverage.keys()) == set(in_coverage.keys())
     assert "weather" in out_of_coverage
+    # Coverage/confidence signal: in-area is backed by history, ocean is not.
+    assert in_coverage["in_coverage"] is True
+    assert 0.0 <= in_coverage["confidence"] <= 1.0
+    assert out_of_coverage["in_coverage"] is False
+    assert out_of_coverage["confidence"] == 0.0
 
 
 def test_map_html_uses_local_static_assets():

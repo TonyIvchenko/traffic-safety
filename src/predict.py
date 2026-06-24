@@ -73,6 +73,27 @@ def _bundle_array(key: str, dtype: np.dtype | type, default: object | None = Non
     return np.asarray(value, dtype=dtype)
 
 
+def _coverage_log_max() -> float:
+    if "cell_total_counts" not in MODEL_BUNDLE:
+        return 0.0
+    counts = _bundle_array("cell_total_counts", np.float32)
+    return float(np.log1p(float(counts.max()))) if counts.size else 0.0
+
+
+_COVERAGE_LOG_MAX = _coverage_log_max()
+
+
+def coverage_confidence(historical_cell_events: float) -> float:
+    """A 0-1 confidence proxy from how much crash history backs a cell.
+
+    Mirrors the overlay confidence grid: log1p(events) normalized by the busiest
+    cell in the bundle. Sparse/out-of-coverage cells return ~0.
+    """
+    if _COVERAGE_LOG_MAX <= 0.0:
+        return 0.0
+    return float(min(1.0, np.log1p(max(0.0, float(historical_cell_events))) / _COVERAGE_LOG_MAX))
+
+
 def _default_weather_for_index(idx: int, hour_of_week: int, month: int) -> np.ndarray:
     if "weather_climatology" not in MODEL_BUNDLE or "candidate_station_indices" not in MODEL_BUNDLE:
         return np.zeros(5, dtype=np.float32)
@@ -183,6 +204,8 @@ def _predict_with_weather(
             "month": month,
             "historical_cell_events": 0,
             "historical_same_hour_events": 0,
+            "in_coverage": False,
+            "confidence": 0.0,
             "risk_score": 0.0,
             "risk_level": "low",
             "weather_source": weather_source,
@@ -236,6 +259,8 @@ def _predict_with_weather(
         "month": month,
         "historical_cell_events": int(prior_total),
         "historical_same_hour_events": int(prior_same_hour),
+        "in_coverage": True,
+        "confidence": coverage_confidence(prior_total),
         "risk_score": probability,
         "risk_level": _risk_level(probability),
         "weather_source": weather_source,

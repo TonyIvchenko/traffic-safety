@@ -57,6 +57,8 @@ class PointRisk(BaseModel):
     month: int
     historical_cell_events: int
     historical_same_hour_events: int
+    in_coverage: bool
+    confidence: float
     risk_score: float
     risk_level: str
     weather_source: str

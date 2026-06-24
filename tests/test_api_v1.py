@@ -55,6 +55,8 @@ def test_v1_point_climatology():
     assert payload["weather_source"] == "climatology"
     assert 0.0 <= payload["risk_score"] <= 1.0
     assert "weather" in payload
+    assert payload["in_coverage"] is True
+    assert 0.0 <= payload["confidence"] <= 1.0
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 
