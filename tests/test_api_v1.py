@@ -105,6 +105,7 @@ def test_v1_openapi_lists_v1_paths():
     assert "/v1/risk/point" in paths
     assert "/v1/risk/point/weekly" in paths
     assert "/v1/risk/route" in paths
+    assert "/v1/risk/area" in paths
     assert "/v1/meta" in paths
     assert "/v1/health" in paths
 
@@ -214,3 +215,82 @@ def test_v1_route_live_dedupes_weather_by_cell(monkeypatch):
     # Both samples fall in one H3 cell, so weather is fetched exactly once.
     assert calls["n"] == 1
     assert response.headers["cache-control"] == "no-store"
+
+
+_FAKE_AREA = {
+    "count": 2,
+    "segments": [
+        {
+            "segment_id": "06:1:0:0",
+            "fullname": "Main St",
+            "coords_json": "[[-118.25, 34.05], [-118.24, 34.06]]",
+            "center_lat": 34.055,
+            "center_lon": -118.245,
+            "segment_idx": 10,
+            "risk_score": 0.71,
+            "forecast_hours": 0,
+            "target_timestamp_local": "2024-09-06T17:00:00",
+            "weather_provider": "climatology",
+        },
+        {
+            "segment_id": "06:2:0:0",
+            "fullname": "Second Ave",
+            "coords_json": "[[-118.30, 34.00], [-118.29, 34.01]]",
+            "center_lat": 34.005,
+            "center_lon": -118.295,
+            "segment_idx": 11,
+            "risk_score": 0.42,
+            "forecast_hours": 0,
+            "target_timestamp_local": "2024-09-06T17:00:00",
+            "weather_provider": "climatology",
+        },
+    ],
+}
+
+_AREA_QUERY = "min_lat=33.9&max_lat=34.2&min_lon=-118.5&max_lon=-118.1"
+
+
+def test_v1_area_json(monkeypatch):
+    import segment_runtime
+
+    monkeypatch.setattr(segment_runtime, "score_segments_in_bbox", lambda **kwargs: _FAKE_AREA)
+    client = TestClient(MODULE.api)
+    response = client.get(f"/v1/risk/area?{_AREA_QUERY}")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    assert payload["segments"][0]["risk_score"] == 0.71
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_v1_area_geojson(monkeypatch):
+    import segment_runtime
+
+    monkeypatch.setattr(segment_runtime, "score_segments_in_bbox", lambda **kwargs: _FAKE_AREA)
+    client = TestClient(MODULE.api)
+    response = client.get(f"/v1/risk/area?{_AREA_QUERY}&format=geojson")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/geo+json")
+    payload = response.json()
+    assert payload["type"] == "FeatureCollection"
+    assert len(payload["features"]) == 2
+    feature = payload["features"][0]
+    assert feature["geometry"]["type"] == "LineString"
+    assert feature["geometry"]["coordinates"] == [[-118.25, 34.05], [-118.24, 34.06]]
+    assert feature["properties"]["segment_id"] == "06:1:0:0"
+    assert feature["properties"]["risk_score"] == 0.71
+
+
+def test_v1_area_rejects_unknown_provider():
+    # Provider is validated before the scorer runs, so no mock is needed.
+    client = TestClient(MODULE.api)
+    response = client.get(f"/v1/risk/area?{_AREA_QUERY}&provider=bogus")
+    assert response.status_code == 400
+
+
+def test_v1_area_rejects_out_of_range_bbox():
+    client = TestClient(MODULE.api)
+    response = client.get(
+        "/v1/risk/area?min_lat=33.9&max_lat=200.0&min_lon=-118.5&max_lon=-118.1"
+    )
+    assert response.status_code == 422

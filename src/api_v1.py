@@ -18,7 +18,8 @@ import h3
 import requests
 
 from live_weather import LiveWeatherProviderError
-from segment_support import densify_polyline, haversine_km, polyline_length_km
+from segment_support import coords_from_json, densify_polyline, haversine_km, polyline_length_km
+import segment_runtime
 
 API_VERSION = "1.0"
 RISK_LEVELS = ["low", "moderate", "high", "extreme"]
@@ -188,6 +189,34 @@ def _extract_route_points(body: RouteRequest) -> list[tuple[float, float]]:
             raise HTTPException(status_code=422, detail=f"waypoint out of range: [{lon}, {lat}]")
         points.append((lon, lat))
     return points
+
+
+def _area_geojson(result: dict) -> dict:
+    features = []
+    for segment in result.get("segments", []):
+        coords = coords_from_json(segment.get("coords_json", "[]"))
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[float(lon), float(lat)] for lon, lat in coords],
+                },
+                "properties": {
+                    "segment_id": segment.get("segment_id"),
+                    "name": segment.get("fullname"),
+                    "segment_idx": segment.get("segment_idx"),
+                    "risk_score": segment.get("risk_score"),
+                    "weather_provider": segment.get("weather_provider"),
+                    "target_timestamp_local": segment.get("target_timestamp_local"),
+                },
+            }
+        )
+    return {
+        "type": "FeatureCollection",
+        "count": result.get("count", len(features)),
+        "features": features,
+    }
 
 
 def _route_geojson(result: dict) -> dict:
@@ -486,6 +515,50 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 headers={"Cache-Control": cache_control},
             )
         response.headers["Cache-Control"] = cache_control
+        return result
+
+    @router.get(
+        "/risk/area",
+        response_model=None,
+        summary="Scored road segments within a bounding box (JSON or GeoJSON)",
+    )
+    def risk_area(
+        response: Response,
+        min_lat: float = Query(..., ge=-90.0, le=90.0),
+        max_lat: float = Query(..., ge=-90.0, le=90.0),
+        min_lon: float = Query(..., ge=-180.0, le=180.0),
+        max_lon: float = Query(..., ge=-180.0, le=180.0),
+        forecast_hours: int = Query(0, ge=0, le=48),
+        provider: str = Query("auto"),
+        limit: int = Query(1500, ge=1, le=5000),
+        output_format: str = Query("json", alias="format", description="'json' or 'geojson'"),
+    ):
+        _validate_provider(provider)
+        try:
+            result = segment_runtime.score_segments_in_bbox(
+                min_lat=min_lat,
+                max_lat=max_lat,
+                min_lon=min_lon,
+                max_lon=max_lon,
+                forecast_hours=forecast_hours,
+                provider=provider,
+                limit=limit,
+            )
+        except LiveWeatherProviderError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except requests.RequestException as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"weather provider request failed: {exc}",
+            ) from exc
+
+        if output_format.strip().lower() == "geojson":
+            return JSONResponse(
+                content=_area_geojson(result),
+                media_type="application/geo+json",
+                headers={"Cache-Control": "no-store"},
+            )
+        response.headers["Cache-Control"] = "no-store"
         return result
 
     return router
