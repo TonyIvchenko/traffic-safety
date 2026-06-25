@@ -73,6 +73,66 @@ export TRAFFIC_SAFETY_ENABLE_TOMORROW_IO=1
 export TOMORROW_IO_API_KEY=...
 ```
 
+## Public API (`/v1`)
+
+A versioned, openly accessible REST API exposes the model outputs for external
+consumers. Interactive docs are served at `/v1/docs` (Swagger) and `/v1/redoc`;
+the schema is at `/v1/openapi.json`. There is **no authentication** — access is
+controlled only by a per-client-IP rate limiter.
+
+Endpoints:
+
+| Method & path | Purpose |
+|---|---|
+| `GET /v1/health` | API liveness + model readiness |
+| `GET /v1/meta` | Discovery: coverage bbox, frames, risk bands, providers, limits, units |
+| `GET /v1/risk/point` | Risk at one point — `mode=climatology` (default) or `mode=live` |
+| `GET /v1/risk/point/weekly` | Full 168-hour risk curve for a point + safest/riskiest hour |
+| `POST /v1/risk/route` | Score a drive (waypoints or GeoJSON LineString) — per-step risk, route index, riskiest stretch |
+| `GET /v1/risk/area` | Scored road segments in a bounding box |
+
+The geospatial endpoints (`/v1/risk/route`, `/v1/risk/area`) accept
+`?format=geojson` and return a GeoJSON `FeatureCollection` (`application/geo+json`)
+that drops straight into Leaflet/Mapbox/QGIS. Risk responses use SI units
+(`celsius`, `m/s`, `km`) and a `risk_score` probability in `[0, 1]`.
+
+Examples:
+
+```bash
+# Climatological point risk (Fri 5pm, September, downtown LA)
+curl "http://127.0.0.1:8080/v1/risk/point?lat=34.0522&lon=-118.2437&day_of_week=5&hour=17&month=9"
+
+# Live point risk (current NWS conditions)
+curl "http://127.0.0.1:8080/v1/risk/point?lat=34.0522&lon=-118.2437&mode=live"
+
+# When is this spot safest during the week?
+curl "http://127.0.0.1:8080/v1/risk/point/weekly?lat=34.0522&lon=-118.2437&month=9"
+
+# Score a drive (climatological), as GeoJSON
+curl -X POST "http://127.0.0.1:8080/v1/risk/route?format=geojson" \
+  -H 'Content-Type: application/json' \
+  -d '{"waypoints": [[-118.2437,34.0522],[-118.40,34.02],[-118.49,34.02]],
+       "mode":"climatology","day_of_week":5,"hour":17,"month":9,"sample_spacing_km":3.0}'
+
+# Scored segments in a bounding box
+curl "http://127.0.0.1:8080/v1/risk/area?min_lat=33.9&max_lat=34.2&min_lon=-118.5&max_lon=-118.1"
+```
+
+Configuration (all optional):
+
+```bash
+# Rate limiting (in-process, per client IP; limits are per server instance)
+export TRAFFIC_SAFETY_RATE_LIMIT_PER_MIN=120   # default 120; set 0 or ENABLED=0 to disable
+export TRAFFIC_SAFETY_RATE_LIMIT_BURST=120     # default = per-minute rate
+export TRAFFIC_SAFETY_RATE_LIMIT_ENABLED=1
+
+# CORS for browser clients (comma-separated origins; default "*")
+export TRAFFIC_SAFETY_CORS_ORIGINS="*"
+```
+
+Successful `/v1` responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`;
+throttled requests return `429` with `Retry-After`.
+
 ## Recommended Shape
 
 The most practical nationwide design is a two-layer system:
