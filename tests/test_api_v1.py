@@ -60,6 +60,30 @@ def test_v1_point_climatology():
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 
+def test_v1_point_explain():
+    client = TestClient(MODULE.api)
+    response = client.get(
+        "/v1/risk/point?lat=34.0522&lon=-118.2437&day_of_week=5&hour=17&month=9&explain=true"
+    )
+    assert response.status_code == 200
+    explanation = response.json()["explanation"]
+    assert explanation is not None
+    assert 0.0 <= explanation["baseline_risk"] <= 1.0
+    factors = explanation["factors"]
+    assert factors
+    assert {"factor", "contribution", "direction"} <= set(factors[0])
+    assert any(f["factor"] == "crash_history" for f in factors)
+    # Factors are sorted by absolute contribution.
+    magnitudes = [abs(f["contribution"]) for f in factors]
+    assert magnitudes == sorted(magnitudes, reverse=True)
+
+
+def test_v1_point_omits_explanation_by_default():
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/risk/point?lat=34.0522&lon=-118.2437&day_of_week=5&hour=17&month=9")
+    assert response.json().get("explanation") is None
+
+
 def test_v1_point_live_uses_mocked_snapshot(monkeypatch):
     snapshot = SimpleNamespace(
         provider="nws",

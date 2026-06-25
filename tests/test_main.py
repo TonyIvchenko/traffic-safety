@@ -85,6 +85,34 @@ def test_predict_traffic_safety_out_of_coverage_keeps_consistent_schema():
     assert out_of_coverage["confidence"] == 0.0
 
 
+def test_explain_prediction_attributes_factors():
+    import predict
+
+    explanation = predict.explain_prediction(
+        lat=34.0522,
+        lon=-118.2437,
+        day_of_week=5,
+        hour=17,
+        month=9,
+        temp_c=20.0,
+        dewpoint_c=12.0,
+        relative_humidity_pct=60.0,
+        wind_speed_mps=3.0,
+        wet_hour=0.0,
+    )
+    factors = explanation["factors"]
+    assert {f["factor"] for f in factors} >= {"crash_history", "time_of_day", "season"}
+    assert 0.0 <= explanation["baseline_risk"] <= 1.0
+
+    # Out-of-coverage points cannot be explained.
+    empty = predict.explain_prediction(
+        lat=0.0, lon=0.0, day_of_week=5, hour=17, month=9,
+        temp_c=20.0, dewpoint_c=12.0, relative_humidity_pct=60.0,
+        wind_speed_mps=3.0, wet_hour=0.0,
+    )
+    assert empty["factors"] == []
+
+
 def test_map_html_uses_local_static_assets():
     html = MODULE._map_html()
 

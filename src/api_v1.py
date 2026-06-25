@@ -47,6 +47,18 @@ class WeatherBlock(BaseModel):
     summary: str
 
 
+class ExplanationFactor(BaseModel):
+    factor: str
+    contribution: float
+    direction: str
+
+
+class Explanation(BaseModel):
+    baseline_risk: float
+    risk_score: float
+    factors: list[ExplanationFactor]
+
+
 class PointRisk(BaseModel):
     model_version: str
     cell_id: str
@@ -67,6 +79,7 @@ class PointRisk(BaseModel):
     live_provider_label: str | None = None
     target_timestamp_local: str | None = None
     forecast_hours: int | None = None
+    explanation: Explanation | None = None
 
 
 class HealthResponse(BaseModel):
@@ -144,6 +157,7 @@ class V1Dependencies:
     rate_limit_per_min: int | None
     predict_point: Callable[..., dict]
     predict_point_live: Callable[..., dict]
+    explain_point: Callable[[dict], dict]
     h3_resolution: int
 
 
@@ -326,6 +340,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         month: int = Query(1, ge=1, le=12, description="month 1-12 (climatology)"),
         forecast_hours: int = Query(0, ge=0, le=48, description="hours ahead (live)"),
         provider: str = Query("auto", description="live weather provider (live)"),
+        explain: bool = Query(False, description="include a factor breakdown of the score"),
     ) -> dict:
         mode_norm = mode.strip().lower()
         if mode_norm not in {"climatology", "live"}:
@@ -335,7 +350,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             _validate_provider(provider)
             response.headers["Cache-Control"] = "no-store"
             try:
-                return deps.predict_point_live(
+                result = deps.predict_point_live(
                     lat=lat,
                     lon=lon,
                     forecast_hours=forecast_hours,
@@ -348,15 +363,19 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     status_code=502,
                     detail=f"weather provider request failed: {exc}",
                 ) from exc
+        else:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+            result = deps.predict_point(
+                lat=lat,
+                lon=lon,
+                day_of_week=day_of_week,
+                hour=hour,
+                month=month,
+            )
 
-        response.headers["Cache-Control"] = "public, max-age=3600"
-        return deps.predict_point(
-            lat=lat,
-            lon=lon,
-            day_of_week=day_of_week,
-            hour=hour,
-            month=month,
-        )
+        if explain:
+            result = {**result, "explanation": deps.explain_point(result)}
+        return result
 
     @router.get(
         "/risk/point/weekly",

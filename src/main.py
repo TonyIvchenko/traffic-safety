@@ -71,6 +71,7 @@ from scripts.common import ROAD_SEGMENTS_PATH
 from predict import (
     MODEL_BUNDLE,
     MODEL_VERSION,
+    explain_for_result,
     predict_traffic_safety,
     predict_traffic_safety_live,
 )
@@ -1103,6 +1104,7 @@ api.include_router(
             rate_limit_per_min=(_RATE_LIMITER.rate_per_min if _RATE_LIMITER else None),
             predict_point=predict_traffic_safety,
             predict_point_live=predict_traffic_safety_live,
+            explain_point=explain_for_result,
             h3_resolution=int(MODEL_BUNDLE.get("resolution", 5)),
         )
     )
