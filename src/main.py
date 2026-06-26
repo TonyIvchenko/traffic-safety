@@ -1085,6 +1085,18 @@ api.add_middleware(
 _RATE_LIMITER = rate_limiter_from_env()
 install_rate_limit_middleware(api, _RATE_LIMITER, path_prefix="/v1")
 
+_MODEL_EVAL_REPORT_PATH = REPO_DIR / "data" / "model_eval_report.json"
+
+
+def _load_model_report() -> dict:
+    if _MODEL_EVAL_REPORT_PATH.exists():
+        try:
+            return json.loads(_MODEL_EVAL_REPORT_PATH.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            pass
+    return {"available": False, "metrics": dict(MODEL_BUNDLE.get("metrics", {}) or {})}
+
+
 _v1_overlay_config = OVERLAY["config"]
 api.include_router(
     build_v1_router(
@@ -1106,6 +1118,8 @@ api.include_router(
             predict_point_live=predict_traffic_safety_live,
             explain_point=explain_for_result,
             h3_resolution=int(MODEL_BUNDLE.get("resolution", 5)),
+            model_metrics=dict(MODEL_BUNDLE.get("metrics", {}) or {}),
+            model_report_loader=_load_model_report,
         )
     )
 )

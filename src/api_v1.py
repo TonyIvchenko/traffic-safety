@@ -159,6 +159,8 @@ class V1Dependencies:
     predict_point_live: Callable[..., dict]
     explain_point: Callable[[dict], dict]
     h3_resolution: int
+    model_metrics: dict
+    model_report_loader: Callable[[], dict]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -306,6 +308,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "api_version": API_VERSION,
             "model_version": deps.model_version,
             "model_ready": deps.model_ready,
+            "model_metrics": deps.model_metrics,
             "coverage": deps.coverage,
             "timeline": {
                 "type": "weekly_cycle",
@@ -324,6 +327,11 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             },
             "docs_url": "/v1/docs",
         }
+
+    @router.get("/model/report", summary="Model evaluation / calibration backtest report")
+    def model_report(response: Response) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=300"
+        return deps.model_report_loader()
 
     @router.get(
         "/risk/point",

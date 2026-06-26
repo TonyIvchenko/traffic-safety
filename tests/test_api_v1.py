@@ -125,6 +125,23 @@ def test_v1_point_rejects_bad_mode_and_coords():
     assert client.get("/v1/risk/point?lat=120&lon=-118").status_code == 422
 
 
+def test_v1_meta_includes_model_metrics():
+    client = TestClient(MODULE.api)
+    payload = client.get("/v1/meta").json()
+    assert "model_metrics" in payload
+    assert isinstance(payload["model_metrics"], dict)
+
+
+def test_v1_model_report():
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/model/report")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, dict)
+    # Either a generated report (has metrics) or the no-report fallback.
+    assert "metrics" in payload or "available" in payload
+
+
 def test_v1_openapi_lists_v1_paths():
     client = TestClient(MODULE.api)
     paths = client.get("/openapi.json").json()["paths"]
