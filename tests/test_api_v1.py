@@ -142,6 +142,51 @@ def test_v1_model_report():
     assert "metrics" in payload or "available" in payload
 
 
+def test_v1_sun_glare_endpoint():
+    client = TestClient(MODULE.api)
+    # Low morning sun in the ENE, driver heading east -> glare.
+    response = client.get(
+        "/v1/hazards/sun-glare?lat=34.05&lon=-118.24&bearing=90&datetime=2024-06-21T13:30:00Z"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["glare"] is True
+    assert payload["window"] == "sunrise"
+    assert "sun_elevation" in payload and "sun_azimuth" in payload
+    # Facing away -> no glare.
+    away = client.get(
+        "/v1/hazards/sun-glare?lat=34.05&lon=-118.24&bearing=270&datetime=2024-06-21T13:30:00Z"
+    )
+    assert away.json()["glare"] is False
+
+
+def test_v1_route_glare_annotation():
+    client = TestClient(MODULE.api)
+    body = {
+        "waypoints": [[-118.2437, 34.0522], [-118.0, 34.0522]],  # heading roughly east
+        "mode": "climatology",
+        "day_of_week": 5,
+        "hour": 6,
+        "month": 6,
+        "sample_spacing_km": 3.0,
+        "glare_datetime": "2024-06-21T13:30:00Z",
+    }
+    response = client.post("/v1/risk/route", json=body)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["glare_segments"] is not None
+    assert payload["steps"][0]["sun_glare"] is not None
+    assert "glare" in payload["steps"][0]["sun_glare"]
+
+
+def test_v1_route_without_glare_datetime_has_no_glare_fields():
+    client = TestClient(MODULE.api)
+    response = client.post("/v1/risk/route", json=_ROUTE_BODY)
+    payload = response.json()
+    assert payload["glare_segments"] is None
+    assert payload["steps"][0]["sun_glare"] is None
+
+
 def test_v1_openapi_lists_v1_paths():
     client = TestClient(MODULE.api)
     paths = client.get("/openapi.json").json()["paths"]

@@ -9,6 +9,7 @@ its already-loaded model/overlay/provider objects and includes the router.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Sequence
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -20,6 +21,7 @@ import requests
 from live_weather import LiveWeatherProviderError
 from segment_support import coords_from_json, densify_polyline, haversine_km, polyline_length_km
 import segment_runtime
+import sun_glare
 
 API_VERSION = "1.0"
 RISK_LEVELS = ["low", "moderate", "high", "extreme"]
@@ -118,6 +120,7 @@ class RouteRequest(BaseModel):
     forecast_hours: int = Field(0, ge=0, le=48)
     provider: str = "auto"
     sample_spacing_km: float = 2.0
+    glare_datetime: str | None = None
 
 
 class RouteStep(BaseModel):
@@ -127,6 +130,7 @@ class RouteStep(BaseModel):
     risk_score: float
     risk_level: str
     cell_id: str
+    sun_glare: dict | None = None
 
 
 class RouteRisk(BaseModel):
@@ -142,6 +146,7 @@ class RouteRisk(BaseModel):
     riskiest_point: RouteStep
     steps: list[RouteStep]
     live_provider: str | None = None
+    glare_segments: int | None = None
 
 
 @dataclass
@@ -235,6 +240,28 @@ def _area_geojson(result: dict) -> dict:
         "count": result.get("count", len(features)),
         "features": features,
     }
+
+
+def _annotate_route_glare(steps: list[dict], glare_datetime: str | None) -> int | None:
+    """Attach per-step sun-glare when a UTC datetime is supplied; return the count."""
+    if not glare_datetime:
+        return None
+    try:
+        when = sun_glare.parse_utc(glare_datetime)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid glare_datetime: {exc}") from exc
+
+    glare_count = 0
+    last_bearing = 0.0
+    for index, step in enumerate(steps):
+        if index + 1 < len(steps):
+            nxt = steps[index + 1]
+            last_bearing = sun_glare.bearing_deg(step["lat"], step["lon"], nxt["lat"], nxt["lon"])
+        assessment = sun_glare.glare_assessment(step["lat"], step["lon"], when, last_bearing)
+        step["sun_glare"] = assessment
+        if assessment["glare"]:
+            glare_count += 1
+    return glare_count
 
 
 def _route_geojson(result: dict) -> dict:
@@ -386,6 +413,31 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         return result
 
     @router.get(
+        "/hazards/sun-glare",
+        summary="Sun-glare assessment for a heading at a location/time",
+    )
+    def sun_glare_hazard(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+        bearing: float = Query(..., ge=0.0, le=360.0, description="travel heading, degrees from North"),
+        at: str | None = Query(None, alias="datetime", description="ISO UTC time; defaults to now"),
+    ) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            when = sun_glare.parse_utc(at) if at else datetime.now(timezone.utc)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"invalid datetime: {exc}") from exc
+        assessment = sun_glare.glare_assessment(lat, lon, when, bearing)
+        return {
+            "lat": lat,
+            "lon": lon,
+            "bearing": bearing,
+            "datetime_utc": when.isoformat(),
+            **assessment,
+        }
+
+    @router.get(
         "/risk/point/weekly",
         response_model=WeeklyPoint,
         summary="Weekly 168-hour climatological risk profile for a point",
@@ -514,6 +566,8 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 detail=f"weather provider request failed: {exc}",
             ) from exc
 
+        glare_segments = _annotate_route_glare(steps, body.glare_datetime)
+
         risk_scores = [step["risk_score"] for step in steps]
         riskiest = max(steps, key=lambda step: step["risk_score"])
         high_risk = sum(1 for step in steps if step["risk_level"] in HIGH_RISK_LEVELS)
@@ -534,6 +588,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "riskiest_point": riskiest,
             "steps": steps,
             "live_provider": live_provider,
+            "glare_segments": glare_segments,
         }
 
         cache_control = "no-store" if mode_norm == "live" else "public, max-age=3600"
