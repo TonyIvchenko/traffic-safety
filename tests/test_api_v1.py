@@ -57,6 +57,7 @@ def test_v1_point_climatology():
     assert "weather" in payload
     assert payload["in_coverage"] is True
     assert 0.0 <= payload["confidence"] <= 1.0
+    assert set(payload["hazards"]) >= {"ice_risk", "fog_risk", "wet", "labels"}
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 
@@ -233,6 +234,7 @@ def test_v1_route_climatology():
     assert payload["riskiest_point"]["risk_score"] == payload["route_risk_score_max"]
     distances = [step["distance_km"] for step in payload["steps"]]
     assert distances == sorted(distances)  # cumulative distance is monotonic
+    assert payload["steps"][0]["hazards"] is not None
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 

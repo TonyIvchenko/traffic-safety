@@ -77,6 +77,7 @@ class PointRisk(BaseModel):
     risk_level: str
     weather_source: str
     weather: WeatherBlock
+    hazards: dict | None = None
     live_provider: str | None = None
     live_provider_label: str | None = None
     target_timestamp_local: str | None = None
@@ -130,6 +131,7 @@ class RouteStep(BaseModel):
     risk_score: float
     risk_level: str
     cell_id: str
+    hazards: dict | None = None
     sun_glare: dict | None = None
 
 
@@ -556,6 +558,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                         "risk_score": float(cached["risk_score"]),
                         "risk_level": cached["risk_level"],
                         "cell_id": cell_id,
+                        "hazards": cached.get("hazards"),
                     }
                 )
         except LiveWeatherProviderError as exc:

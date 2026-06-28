@@ -24,6 +24,7 @@ if str(REPO_DIR) not in sys.path:
 
 from live_weather import fetch_live_weather
 from model_support import build_feature_matrix, lookup_weather_climatology
+import hazard_flags
 
 MODEL_PATH = REPO_DIR / "models" / "traffic_safety.joblib"
 
@@ -254,6 +255,15 @@ def _predict_with_weather(
                 "wet_hour": float(wet_hour),
                 "summary": weather_summary,
             },
+            "hazards": hazard_flags.assess_hazards(
+                {
+                    "temp_c": float(temp_c),
+                    "dewpoint_c": float(dewpoint_c),
+                    "relative_humidity_pct": float(relative_humidity_pct),
+                    "wind_speed_mps": float(wind_speed_mps),
+                    "wet_hour": float(wet_hour),
+                }
+            ),
             "live_provider": provider,
             "live_provider_label": provider_label,
             "target_timestamp_local": timestamp_local,
@@ -309,6 +319,15 @@ def _predict_with_weather(
             "wet_hour": float(wet_hour),
             "summary": weather_summary,
         },
+        "hazards": hazard_flags.assess_hazards(
+            {
+                "temp_c": float(temp_c),
+                "dewpoint_c": float(dewpoint_c),
+                "relative_humidity_pct": float(relative_humidity_pct),
+                "wind_speed_mps": float(wind_speed_mps),
+                "wet_hour": float(wet_hour),
+            }
+        ),
         "live_provider": provider,
         "live_provider_label": provider_label,
         "target_timestamp_local": timestamp_local,
