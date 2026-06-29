@@ -110,21 +110,17 @@ def _station_live_contexts(
     return contexts
 
 
-def score_segments_in_bbox(
+def _prepare_bbox_candidates(
     *,
     min_lat: float,
     max_lat: float,
     min_lon: float,
     max_lon: float,
-    forecast_hours: int = 0,
-    provider: str = "auto",
-    limit: int = SEGMENT_SERVE_LIMIT,
-) -> dict[str, object]:
+    limit: int,
+):
     runtime = load_segment_runtime()
     bundle = runtime["bundle"]
     roads = runtime["roads"]
-    static_features = runtime["static_features"]
-    rep_by_index = runtime["rep_by_index"]
 
     filtered = roads.loc[
         roads["max_lat"].ge(min_lat)
@@ -133,7 +129,7 @@ def score_segments_in_bbox(
         & roads["min_lon"].le(max_lon)
     ].copy()
     if filtered.empty:
-        return {"segments": [], "count": 0}
+        return None
 
     counts = np.asarray(bundle["segment_total_counts"], dtype=np.float32)
     filtered["historical_events"] = counts[filtered["segment_idx"].to_numpy(dtype=np.int32)]
@@ -144,13 +140,13 @@ def score_segments_in_bbox(
 
     station_indices_all = np.asarray(bundle["segment_station_indices"], dtype=np.int16)
     filtered_station_indices = station_indices_all[filtered["segment_idx"].to_numpy(dtype=np.int32)]
-    station_contexts = _station_live_contexts(
-        filtered_station_indices,
-        rep_by_index=rep_by_index,
-        forecast_hours=forecast_hours,
-        provider=provider,
-    )
+    return runtime, filtered, filtered_station_indices
 
+
+def _score_rows(filtered, filtered_station_indices, station_contexts, runtime, forecast_hours):
+    bundle = runtime["bundle"]
+    static_features = runtime["static_features"]
+    counts = np.asarray(bundle["segment_total_counts"], dtype=np.float32)
     weather_cube = np.asarray(bundle["weather_climatology"], dtype=np.float32)
     weather_defaults = np.asarray(bundle["weather_defaults"], dtype=np.float32)
     hour_counts = np.asarray(bundle["segment_hour_counts"], dtype=np.float32)
@@ -196,12 +192,94 @@ def score_segments_in_bbox(
         part["target_timestamp_local"] = ctx["timestamp_local"]
         part["weather_provider"] = ctx["provider"]
         rows.append(part)
+    return pd.concat(rows, ignore_index=True)
 
-    scored = pd.concat(rows, ignore_index=True).sort_values("risk_score", ascending=False)
+
+def _baseline_contexts(live_contexts: dict[int, dict]) -> dict[int, dict]:
+    # Same time-of-week as the live contexts but climatology weather, so a
+    # live-vs-baseline delta isolates the current weather anomaly.
+    return {
+        index: {
+            **context,
+            "temp_c": None,
+            "relative_humidity_pct": None,
+            "wind_speed_mps": None,
+            "wet_hour": None,
+            "provider": "climatology",
+        }
+        for index, context in live_contexts.items()
+    }
+
+
+def score_segments_in_bbox(
+    *,
+    min_lat: float,
+    max_lat: float,
+    min_lon: float,
+    max_lon: float,
+    forecast_hours: int = 0,
+    provider: str = "auto",
+    limit: int = SEGMENT_SERVE_LIMIT,
+) -> dict[str, object]:
+    prepared = _prepare_bbox_candidates(
+        min_lat=min_lat, max_lat=max_lat, min_lon=min_lon, max_lon=max_lon, limit=limit
+    )
+    if prepared is None:
+        return {"segments": [], "count": 0}
+    runtime, filtered, filtered_station_indices = prepared
+
+    station_contexts = _station_live_contexts(
+        filtered_station_indices,
+        rep_by_index=runtime["rep_by_index"],
+        forecast_hours=forecast_hours,
+        provider=provider,
+    )
+    scored = _score_rows(
+        filtered, filtered_station_indices, station_contexts, runtime, forecast_hours
+    ).sort_values("risk_score", ascending=False)
     if len(scored) > limit:
         scored = scored.head(limit).copy()
+    return {"count": int(len(scored)), "segments": scored.to_dict(orient="records")}
 
+
+def rank_hotspots_in_bbox(
+    *,
+    min_lat: float,
+    max_lat: float,
+    min_lon: float,
+    max_lon: float,
+    forecast_hours: int = 0,
+    provider: str = "auto",
+    top_n: int = 50,
+    rank_by: str = "risk",
+) -> dict[str, object]:
+    rank_by = "delta" if str(rank_by).lower() == "delta" else "risk"
+    prepared = _prepare_bbox_candidates(
+        min_lat=min_lat, max_lat=max_lat, min_lon=min_lon, max_lon=max_lon, limit=top_n
+    )
+    if prepared is None:
+        return {"segments": [], "count": 0, "rank_by": rank_by}
+    runtime, filtered, filtered_station_indices = prepared
+
+    live_contexts = _station_live_contexts(
+        filtered_station_indices,
+        rep_by_index=runtime["rep_by_index"],
+        forecast_hours=forecast_hours,
+        provider=provider,
+    )
+    live = _score_rows(filtered, filtered_station_indices, live_contexts, runtime, forecast_hours)
+    baseline = _score_rows(
+        filtered, filtered_station_indices, _baseline_contexts(live_contexts), runtime, forecast_hours
+    )[["segment_idx", "risk_score"]].rename(columns={"risk_score": "baseline_score"})
+
+    merged = live.merge(baseline, on="segment_idx", how="left")
+    merged["baseline_score"] = merged["baseline_score"].fillna(merged["risk_score"])
+    merged["delta"] = merged["risk_score"] - merged["baseline_score"]
+
+    sort_column = "delta" if rank_by == "delta" else "risk_score"
+    merged = merged.sort_values(sort_column, ascending=False).head(int(top_n)).copy()
     return {
-        "count": int(len(scored)),
-        "segments": scored.to_dict(orient="records"),
+        "count": int(len(merged)),
+        "rank_by": rank_by,
+        "segments": merged.to_dict(orient="records"),
     }

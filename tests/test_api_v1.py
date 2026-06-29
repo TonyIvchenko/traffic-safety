@@ -195,6 +195,7 @@ def test_v1_openapi_lists_v1_paths():
     assert "/v1/risk/point/weekly" in paths
     assert "/v1/risk/route" in paths
     assert "/v1/risk/area" in paths
+    assert "/v1/hotspots" in paths
     assert "/v1/meta" in paths
     assert "/v1/health" in paths
 
@@ -384,3 +385,70 @@ def test_v1_area_rejects_out_of_range_bbox():
         "/v1/risk/area?min_lat=33.9&max_lat=200.0&min_lon=-118.5&max_lon=-118.1"
     )
     assert response.status_code == 422
+
+
+_FAKE_HOTSPOTS = {
+    "count": 2,
+    "rank_by": "delta",
+    "segments": [
+        {
+            "segment_id": "06:1:0:0",
+            "fullname": "Main St",
+            "coords_json": "[[-118.25, 34.05], [-118.24, 34.06]]",
+            "segment_idx": 10,
+            "risk_score": 0.82,
+            "baseline_score": 0.30,
+            "delta": 0.52,
+            "weather_provider": "nws",
+        },
+        {
+            "segment_id": "06:2:0:0",
+            "fullname": "Second Ave",
+            "coords_json": "[[-118.30, 34.00], [-118.29, 34.01]]",
+            "segment_idx": 11,
+            "risk_score": 0.60,
+            "baseline_score": 0.40,
+            "delta": 0.20,
+            "weather_provider": "nws",
+        },
+    ],
+}
+
+
+def test_v1_hotspots_json(monkeypatch):
+    import segment_runtime
+
+    monkeypatch.setattr(segment_runtime, "rank_hotspots_in_bbox", lambda **kwargs: _FAKE_HOTSPOTS)
+    client = TestClient(MODULE.api)
+    response = client.get(f"/v1/hotspots?{_AREA_QUERY}&rank_by=delta&top_n=10")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    assert payload["rank_by"] == "delta"
+    assert payload["segments"][0]["delta"] == 0.52
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_v1_hotspots_geojson(monkeypatch):
+    import segment_runtime
+
+    monkeypatch.setattr(segment_runtime, "rank_hotspots_in_bbox", lambda **kwargs: _FAKE_HOTSPOTS)
+    client = TestClient(MODULE.api)
+    response = client.get(f"/v1/hotspots?{_AREA_QUERY}&format=geojson")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/geo+json")
+    payload = response.json()
+    assert payload["type"] == "FeatureCollection"
+    props = payload["features"][0]["properties"]
+    assert props["delta"] == 0.52
+    assert props["baseline_score"] == 0.30
+
+
+def test_v1_hotspots_rejects_bad_rank_by():
+    client = TestClient(MODULE.api)
+    assert client.get(f"/v1/hotspots?{_AREA_QUERY}&rank_by=nonsense").status_code == 422
+
+
+def test_v1_hotspots_rejects_unknown_provider():
+    client = TestClient(MODULE.api)
+    assert client.get(f"/v1/hotspots?{_AREA_QUERY}&provider=bogus").status_code == 400

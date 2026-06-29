@@ -266,6 +266,35 @@ def _annotate_route_glare(steps: list[dict], glare_datetime: str | None) -> int 
     return glare_count
 
 
+def _hotspots_geojson(result: dict) -> dict:
+    features = []
+    for segment in result.get("segments", []):
+        coords = coords_from_json(segment.get("coords_json", "[]"))
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[float(lon), float(lat)] for lon, lat in coords],
+                },
+                "properties": {
+                    "segment_id": segment.get("segment_id"),
+                    "name": segment.get("fullname"),
+                    "risk_score": segment.get("risk_score"),
+                    "baseline_score": segment.get("baseline_score"),
+                    "delta": segment.get("delta"),
+                    "weather_provider": segment.get("weather_provider"),
+                },
+            }
+        )
+    return {
+        "type": "FeatureCollection",
+        "count": result.get("count", len(features)),
+        "rank_by": result.get("rank_by"),
+        "features": features,
+    }
+
+
 def _route_geojson(result: dict) -> dict:
     steps = result["steps"]
     return {
@@ -642,6 +671,55 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         if output_format.strip().lower() == "geojson":
             return JSONResponse(
                 content=_area_geojson(result),
+                media_type="application/geo+json",
+                headers={"Cache-Control": "no-store"},
+            )
+        response.headers["Cache-Control"] = "no-store"
+        return result
+
+    @router.get(
+        "/hotspots",
+        response_model=None,
+        summary="Ranked crash-risk hotspots in a bounding box (by risk or risk-vs-typical delta)",
+    )
+    def hotspots(
+        response: Response,
+        min_lat: float = Query(..., ge=-90.0, le=90.0),
+        max_lat: float = Query(..., ge=-90.0, le=90.0),
+        min_lon: float = Query(..., ge=-180.0, le=180.0),
+        max_lon: float = Query(..., ge=-180.0, le=180.0),
+        forecast_hours: int = Query(0, ge=0, le=48),
+        provider: str = Query("auto"),
+        top_n: int = Query(50, ge=1, le=500),
+        rank_by: str = Query("risk", description="'risk' or 'delta' (risk vs typical)"),
+        output_format: str = Query("json", alias="format", description="'json' or 'geojson'"),
+    ):
+        _validate_provider(provider)
+        rank_norm = rank_by.strip().lower()
+        if rank_norm not in {"risk", "delta"}:
+            raise HTTPException(status_code=422, detail="rank_by must be 'risk' or 'delta'")
+        try:
+            result = segment_runtime.rank_hotspots_in_bbox(
+                min_lat=min_lat,
+                max_lat=max_lat,
+                min_lon=min_lon,
+                max_lon=max_lon,
+                forecast_hours=forecast_hours,
+                provider=provider,
+                top_n=top_n,
+                rank_by=rank_norm,
+            )
+        except LiveWeatherProviderError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except requests.RequestException as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"weather provider request failed: {exc}",
+            ) from exc
+
+        if output_format.strip().lower() == "geojson":
+            return JSONResponse(
+                content=_hotspots_geojson(result),
                 media_type="application/geo+json",
                 headers={"Cache-Control": "no-store"},
             )
