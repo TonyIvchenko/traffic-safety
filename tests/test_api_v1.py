@@ -196,6 +196,7 @@ def test_v1_openapi_lists_v1_paths():
     assert "/v1/risk/route" in paths
     assert "/v1/risk/area" in paths
     assert "/v1/hotspots" in paths
+    assert "/v1/heatmap" in paths
     assert "/v1/meta" in paths
     assert "/v1/health" in paths
 
@@ -452,3 +453,43 @@ def test_v1_hotspots_rejects_bad_rank_by():
 def test_v1_hotspots_rejects_unknown_provider():
     client = TestClient(MODULE.api)
     assert client.get(f"/v1/hotspots?{_AREA_QUERY}&provider=bogus").status_code == 400
+
+
+_HEATMAP_QUERY = "min_lat=33.7&max_lat=34.3&min_lon=-118.7&max_lon=-118.0&day_of_week=6&hour=2"
+
+
+def test_v1_heatmap_samples_grid_within_bbox():
+    client = TestClient(MODULE.api)
+    response = client.get(f"/v1/heatmap?{_HEATMAP_QUERY}&max_cells=500")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["frame_idx"] == (6 - 1) * 24 + 2
+    assert payload["cell_count"] == len(payload["cells"])
+    for cell in payload["cells"]:
+        assert 33.7 <= cell["lat"] <= 34.3
+        assert -118.7 <= cell["lon"] <= -118.0
+        assert 0.0 <= cell["risk"] <= 1.0
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_v1_heatmap_min_risk_filter_and_cap():
+    client = TestClient(MODULE.api)
+    low = client.get(f"/v1/heatmap?{_HEATMAP_QUERY}").json()["cell_count"]
+    high = client.get(f"/v1/heatmap?{_HEATMAP_QUERY}&min_risk=0.9").json()["cell_count"]
+    assert high <= low
+    # A CONUS-wide request with a small cap must stay bounded.
+    capped = client.get(
+        "/v1/heatmap?min_lat=25&max_lat=49&min_lon=-124&max_lon=-67&day_of_week=6&hour=2&max_cells=300"
+    ).json()
+    assert capped["cell_count"] <= 300
+
+
+def test_v1_heatmap_geojson():
+    client = TestClient(MODULE.api)
+    response = client.get(f"/v1/heatmap?{_HEATMAP_QUERY}&format=geojson")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/geo+json")
+    payload = response.json()
+    assert payload["type"] == "FeatureCollection"
+    if payload["features"]:
+        assert payload["features"][0]["geometry"]["type"] == "Point"

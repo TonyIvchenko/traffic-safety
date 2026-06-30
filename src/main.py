@@ -1120,6 +1120,7 @@ api.include_router(
             h3_resolution=int(MODEL_BUNDLE.get("resolution", 5)),
             model_metrics=dict(MODEL_BUNDLE.get("metrics", {}) or {}),
             model_report_loader=_load_model_report,
+            risk_cube=OVERLAY["risk"],
         )
     )
 )

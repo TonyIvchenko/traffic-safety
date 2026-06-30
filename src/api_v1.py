@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import math
 from typing import Callable, Sequence
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -168,6 +169,7 @@ class V1Dependencies:
     h3_resolution: int
     model_metrics: dict
     model_report_loader: Callable[[], dict]
+    risk_cube: object
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -264,6 +266,72 @@ def _annotate_route_glare(steps: list[dict], glare_datetime: str | None) -> int 
         if assessment["glare"]:
             glare_count += 1
     return glare_count
+
+
+def _sample_risk_grid(cube, coverage: dict, frame_idx: int, bbox, max_cells: int, min_risk: float) -> list[dict]:
+    """Sample the climatological risk grid for a frame within a bbox (bounded)."""
+    frames = len(cube)
+    if frames == 0:
+        return []
+    frame_idx = max(0, min(frames - 1, int(frame_idx)))
+    frame = cube[frame_idx]
+    height = len(frame)
+    width = len(frame[0]) if height else 0
+    if height == 0 or width == 0:
+        return []
+
+    lat_min = float(coverage.get("lat_min", -90.0))
+    lat_max = float(coverage.get("lat_max", 90.0))
+    lon_min = float(coverage.get("lon_min", -180.0))
+    lon_max = float(coverage.get("lon_max", 180.0))
+    lat_span = (lat_max - lat_min) or 1.0
+    lon_span = (lon_max - lon_min) or 1.0
+    row_denom = (height - 1) or 1
+    col_denom = (width - 1) or 1
+    qmin_lat, qmax_lat, qmin_lon, qmax_lon = bbox
+
+    def _clip(value, hi):
+        return max(0, min(hi, int(value)))
+
+    # ceil on the min-lat/min-lon (north/left) edge and floor on the other so
+    # every sampled cell centre stays within the requested bbox.
+    row_top = _clip(math.ceil((lat_max - qmax_lat) / lat_span * row_denom), height - 1)
+    row_bottom = _clip(math.floor((lat_max - qmin_lat) / lat_span * row_denom), height - 1)
+    col_left = _clip(math.ceil((qmin_lon - lon_min) / lon_span * col_denom), width - 1)
+    col_right = _clip(math.floor((qmax_lon - lon_min) / lon_span * col_denom), width - 1)
+    if row_top > row_bottom or col_left > col_right:
+        return []
+
+    total = (row_bottom - row_top + 1) * (col_right - col_left + 1)
+    stride = max(1, int(math.ceil(math.sqrt(total / max_cells)))) if total > max_cells else 1
+
+    cells: list[dict] = []
+    for row in range(row_top, row_bottom + 1, stride):
+        lat = lat_max - (row / row_denom) * lat_span
+        frame_row = frame[row]
+        for col in range(col_left, col_right + 1, stride):
+            risk = float(frame_row[col])
+            if risk < min_risk:
+                continue
+            lon = lon_min + (col / col_denom) * lon_span
+            cells.append({"lat": round(lat, 5), "lon": round(lon, 5), "risk": round(risk, 4)})
+    return cells
+
+
+def _heatmap_geojson(result: dict) -> dict:
+    return {
+        "type": "FeatureCollection",
+        "frame_idx": result["frame_idx"],
+        "frame_label": result["frame_label"],
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [cell["lon"], cell["lat"]]},
+                "properties": {"risk": cell["risk"]},
+            }
+            for cell in result["cells"]
+        ],
+    }
 
 
 def _hotspots_geojson(result: dict) -> dict:
@@ -724,6 +792,50 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 headers={"Cache-Control": "no-store"},
             )
         response.headers["Cache-Control"] = "no-store"
+        return result
+
+    @router.get(
+        "/heatmap",
+        response_model=None,
+        summary="Climatological risk heatmap grid for a time window (staging/planning)",
+    )
+    def heatmap(
+        response: Response,
+        min_lat: float = Query(..., ge=-90.0, le=90.0),
+        max_lat: float = Query(..., ge=-90.0, le=90.0),
+        min_lon: float = Query(..., ge=-180.0, le=180.0),
+        max_lon: float = Query(..., ge=-180.0, le=180.0),
+        day_of_week: int = Query(1, ge=1, le=7, description="Monday=1..Sunday=7"),
+        hour: int = Query(0, ge=0, le=23),
+        min_risk: float = Query(0.0, ge=0.0, le=1.0, description="only return cells at/above this risk"),
+        max_cells: int = Query(2000, ge=1, le=20000),
+        output_format: str = Query("json", alias="format", description="'json' or 'geojson'"),
+    ):
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        frame_idx = (day_of_week - 1) * 24 + hour
+        cells = _sample_risk_grid(
+            deps.risk_cube,
+            deps.coverage,
+            frame_idx,
+            (min_lat, max_lat, min_lon, max_lon),
+            max_cells,
+            min_risk,
+        )
+        frame_label = (
+            deps.frame_labels[frame_idx] if frame_idx < len(deps.frame_labels) else str(frame_idx)
+        )
+        result = {
+            "frame_idx": frame_idx,
+            "frame_label": frame_label,
+            "cell_count": len(cells),
+            "cells": cells,
+        }
+        if output_format.strip().lower() == "geojson":
+            return JSONResponse(
+                content=_heatmap_geojson(result),
+                media_type="application/geo+json",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
         return result
 
     return router
