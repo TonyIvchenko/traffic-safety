@@ -194,6 +194,7 @@ def test_v1_openapi_lists_v1_paths():
     assert "/v1/risk/point" in paths
     assert "/v1/risk/point/weekly" in paths
     assert "/v1/risk/route" in paths
+    assert "/v1/risk/route/compare" in paths
     assert "/v1/risk/area" in paths
     assert "/v1/hotspots" in paths
     assert "/v1/heatmap" in paths
@@ -453,6 +454,97 @@ def test_v1_hotspots_rejects_bad_rank_by():
 def test_v1_hotspots_rejects_unknown_provider():
     client = TestClient(MODULE.api)
     assert client.get(f"/v1/hotspots?{_AREA_QUERY}&provider=bogus").status_code == 400
+
+
+_COMPARE_BODY = {
+    "routes": [
+        {"label": "city", "waypoints": [[-118.2437, 34.0522], [-118.40, 34.02]]},
+        # Out-of-coverage ocean route scores 0 everywhere -> always safest.
+        {"label": "ocean", "waypoints": [[-140.0, 30.0], [-140.1, 30.1]]},
+    ],
+    "mode": "climatology",
+    "day_of_week": 5,
+    "hour": 17,
+    "month": 9,
+    "sample_spacing_km": 5.0,
+}
+
+
+def test_v1_route_compare_recommends_lowest_risk():
+    client = TestClient(MODULE.api)
+    response = client.post("/v1/risk/route/compare", json=_COMPARE_BODY)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["recommended_index"] == 1
+    assert payload["recommended_label"] == "ocean"
+    by_label = {c["label"]: c for c in payload["candidates"]}
+    assert by_label["ocean"]["rank"] == 1 and by_label["ocean"]["recommended"] is True
+    assert by_label["city"]["rank"] == 2 and by_label["city"]["recommended"] is False
+    assert by_label["city"]["route_risk_score_mean"] > by_label["ocean"]["route_risk_score_mean"]
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_v1_route_compare_geojson():
+    client = TestClient(MODULE.api)
+    response = client.post("/v1/risk/route/compare?format=geojson", json=_COMPARE_BODY)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/geo+json")
+    payload = response.json()
+    assert payload["type"] == "FeatureCollection"
+    assert len(payload["features"]) == 2
+    assert payload["recommended_index"] == 1
+    recommended = [f for f in payload["features"] if f["properties"]["recommended"]]
+    assert len(recommended) == 1
+    assert recommended[0]["geometry"]["type"] == "LineString"
+
+
+def test_v1_route_compare_validation():
+    client = TestClient(MODULE.api)
+    single = {**_COMPARE_BODY, "routes": _COMPARE_BODY["routes"][:1]}
+    assert client.post("/v1/risk/route/compare", json=single).status_code == 422
+    bad_objective = {**_COMPARE_BODY, "objective": "weird"}
+    assert client.post("/v1/risk/route/compare", json=bad_objective).status_code == 422
+    six = {**_COMPARE_BODY, "routes": _COMPARE_BODY["routes"] * 3}
+    assert client.post("/v1/risk/route/compare", json=six).status_code == 422
+
+
+def test_v1_route_compare_live_shares_weather_cache(monkeypatch):
+    calls = {"n": 0}
+    snapshot = SimpleNamespace(
+        provider="nws",
+        provider_label="NWS",
+        observed_or_forecast="observation",
+        timestamp_local=datetime(2024, 9, 6, 17, 0, tzinfo=timezone.utc),
+        forecast_hours=0,
+        temp_c=22.0,
+        dewpoint_c=15.0,
+        relative_humidity_pct=63.0,
+        wind_speed_mps=4.5,
+        wet_hour=0.0,
+        summary="Clear",
+    )
+
+    import predict
+
+    def fake_fetch(**kwargs):
+        calls["n"] += 1
+        return snapshot
+
+    monkeypatch.setattr(predict, "fetch_live_weather", fake_fetch)
+    client = TestClient(MODULE.api)
+    body = {
+        "routes": [
+            {"label": "a", "waypoints": [[-118.2437, 34.0522], [-118.2440, 34.0525]]},
+            {"label": "b", "waypoints": [[-118.2437, 34.0522], [-118.2445, 34.0530]]},
+        ],
+        "mode": "live",
+        "sample_spacing_km": 2.0,
+    }
+    response = client.post("/v1/risk/route/compare", json=body)
+    assert response.status_code == 200
+    # Both candidates sit in one H3 cell; the shared cache means one fetch total.
+    assert calls["n"] == 1
+    assert response.headers["cache-control"] == "no-store"
 
 
 _HEATMAP_QUERY = "min_lat=33.7&max_lat=34.3&min_lon=-118.7&max_lon=-118.0&day_of_week=6&hour=2"

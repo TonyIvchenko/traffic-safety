@@ -16,11 +16,11 @@ from typing import Callable, Sequence
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-import h3
 import requests
 
 from live_weather import LiveWeatherProviderError
-from segment_support import coords_from_json, densify_polyline, haversine_km, polyline_length_km
+from segment_support import coords_from_json
+import risk_eval
 import segment_runtime
 import sun_glare
 
@@ -34,11 +34,8 @@ UNITS = {
     "risk_score": "probability_0_1",
 }
 
-MAX_ROUTE_SAMPLES = 500
 MAX_ROUTE_WAYPOINTS = 1000
-MIN_SPACING_KM = 0.05
-MAX_SPACING_KM = 50.0
-HIGH_RISK_LEVELS = {"high", "extreme"}
+MAX_COMPARE_ROUTES = 5
 
 
 class WeatherBlock(BaseModel):
@@ -150,6 +147,24 @@ class RouteRisk(BaseModel):
     steps: list[RouteStep]
     live_provider: str | None = None
     glare_segments: int | None = None
+
+
+class RouteCandidate(BaseModel):
+    waypoints: list[list[float]] | None = None
+    geojson: dict | None = None
+    label: str | None = None
+
+
+class RouteCompareRequest(BaseModel):
+    routes: list[RouteCandidate] = Field(min_length=2, max_length=MAX_COMPARE_ROUTES)
+    mode: str = "climatology"
+    day_of_week: int = Field(1, ge=1, le=7)
+    hour: int = Field(0, ge=0, le=23)
+    month: int = Field(1, ge=1, le=12)
+    forecast_hours: int = Field(0, ge=0, le=48)
+    provider: str = "auto"
+    sample_spacing_km: float = 2.0
+    objective: str = "mean"
 
 
 @dataclass
@@ -331,6 +346,37 @@ def _heatmap_geojson(result: dict) -> dict:
             }
             for cell in result["cells"]
         ],
+    }
+
+
+def _compare_geojson(result: dict) -> dict:
+    features = []
+    for candidate in result["candidates"]:
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[step["lon"], step["lat"]] for step in candidate["steps"]],
+                },
+                "properties": {
+                    "index": candidate["index"],
+                    "label": candidate["label"],
+                    "rank": candidate["rank"],
+                    "recommended": candidate["recommended"],
+                    "distance_km": candidate["distance_km"],
+                    "route_risk_score_mean": candidate["route_risk_score_mean"],
+                    "route_risk_score_max": candidate["route_risk_score_max"],
+                    "route_risk_level": candidate["route_risk_level"],
+                    "high_risk_fraction": candidate["high_risk_fraction"],
+                },
+            }
+        )
+    return {
+        "type": "FeatureCollection",
+        "objective": result["objective"],
+        "recommended_index": result["recommended_index"],
+        "features": features,
     }
 
 
@@ -591,73 +637,25 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         output_format: str = Query("json", alias="format", description="'json' or 'geojson'"),
     ):
         points = _extract_route_points(body)
-        spacing = float(body.sample_spacing_km)
-        if not (MIN_SPACING_KM <= spacing <= MAX_SPACING_KM):
-            raise HTTPException(
-                status_code=422,
-                detail=f"sample_spacing_km must be between {MIN_SPACING_KM} and {MAX_SPACING_KM} km",
-            )
-        mode_norm = body.mode.strip().lower()
-        if mode_norm not in {"climatology", "live"}:
-            raise HTTPException(status_code=422, detail="mode must be 'climatology' or 'live'")
-
-        estimated = int(polyline_length_km(points) / spacing) + len(points)
-        if estimated > MAX_ROUTE_SAMPLES:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"route needs ~{estimated} samples at {spacing} km spacing "
-                    f"(max {MAX_ROUTE_SAMPLES}); increase sample_spacing_km"
-                ),
-            )
-        if mode_norm == "live":
+        if body.mode.strip().lower() == "live":
             _validate_provider(body.provider)
 
-        dense = densify_polyline(points, max_edge_km=spacing)
-        if len(dense) > MAX_ROUTE_SAMPLES:
-            raise HTTPException(
-                status_code=422,
-                detail=f"route produced {len(dense)} samples (max {MAX_ROUTE_SAMPLES})",
-            )
-
-        cell_cache: dict[str, dict] = {}
-        steps: list[dict] = []
-        cumulative = 0.0
         try:
-            for index, (lon, lat) in enumerate(dense):
-                if index > 0:
-                    prev_lon, prev_lat = dense[index - 1]
-                    cumulative += haversine_km(prev_lat, prev_lon, lat, lon)
-                cell_id = h3.latlng_to_cell(float(lat), float(lon), deps.h3_resolution)
-                cached = cell_cache.get(cell_id)
-                if cached is None:
-                    if mode_norm == "live":
-                        cached = deps.predict_point_live(
-                            lat=lat,
-                            lon=lon,
-                            forecast_hours=body.forecast_hours,
-                            provider=body.provider,
-                        )
-                    else:
-                        cached = deps.predict_point(
-                            lat=lat,
-                            lon=lon,
-                            day_of_week=body.day_of_week,
-                            hour=body.hour,
-                            month=body.month,
-                        )
-                    cell_cache[cell_id] = cached
-                steps.append(
-                    {
-                        "lat": float(lat),
-                        "lon": float(lon),
-                        "distance_km": round(float(cumulative), 4),
-                        "risk_score": float(cached["risk_score"]),
-                        "risk_level": cached["risk_level"],
-                        "cell_id": cell_id,
-                        "hazards": cached.get("hazards"),
-                    }
-                )
+            result = risk_eval.score_route(
+                points,
+                mode=body.mode,
+                predict_point=deps.predict_point,
+                predict_point_live=deps.predict_point_live,
+                h3_resolution=deps.h3_resolution,
+                sample_spacing_km=body.sample_spacing_km,
+                day_of_week=body.day_of_week,
+                hour=body.hour,
+                month=body.month,
+                forecast_hours=body.forecast_hours,
+                provider=body.provider,
+            )
+        except (risk_eval.RouteConfigError, risk_eval.RouteTooLongError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except LiveWeatherProviderError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except requests.RequestException as exc:
@@ -666,35 +664,90 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 detail=f"weather provider request failed: {exc}",
             ) from exc
 
-        glare_segments = _annotate_route_glare(steps, body.glare_datetime)
+        result["model_version"] = deps.model_version
+        result["glare_segments"] = _annotate_route_glare(result["steps"], body.glare_datetime)
 
-        risk_scores = [step["risk_score"] for step in steps]
-        riskiest = max(steps, key=lambda step: step["risk_score"])
-        high_risk = sum(1 for step in steps if step["risk_level"] in HIGH_RISK_LEVELS)
-        live_provider = None
-        if mode_norm == "live" and cell_cache:
-            live_provider = next(iter(cell_cache.values())).get("live_provider")
-
-        result = {
-            "mode": mode_norm,
-            "model_version": deps.model_version,
-            "distance_km": round(float(cumulative), 4),
-            "sample_count": len(steps),
-            "sample_spacing_km": spacing,
-            "route_risk_score_mean": sum(risk_scores) / len(risk_scores),
-            "route_risk_score_max": riskiest["risk_score"],
-            "route_risk_level": riskiest["risk_level"],
-            "high_risk_fraction": high_risk / len(steps),
-            "riskiest_point": riskiest,
-            "steps": steps,
-            "live_provider": live_provider,
-            "glare_segments": glare_segments,
-        }
-
-        cache_control = "no-store" if mode_norm == "live" else "public, max-age=3600"
+        cache_control = "no-store" if result["mode"] == "live" else "public, max-age=3600"
         if output_format.strip().lower() == "geojson":
             return JSONResponse(
                 content=_route_geojson(result),
+                media_type="application/geo+json",
+                headers={"Cache-Control": cache_control},
+            )
+        response.headers["Cache-Control"] = cache_control
+        return result
+
+    @router.post(
+        "/risk/route/compare",
+        response_model=None,
+        summary="Score candidate routes for the same trip and recommend the safest",
+    )
+    def risk_route_compare(
+        response: Response,
+        body: RouteCompareRequest,
+        output_format: str = Query("json", alias="format", description="'json' or 'geojson'"),
+    ):
+        objective = body.objective.strip().lower()
+        if objective not in {"mean", "max"}:
+            raise HTTPException(status_code=422, detail="objective must be 'mean' or 'max'")
+        if body.mode.strip().lower() == "live":
+            _validate_provider(body.provider)
+
+        # Candidate routes for one trip usually overlap, so share the per-cell
+        # prediction cache across all of them (one weather fetch per cell).
+        shared_cache: dict[str, dict] = {}
+        candidates: list[dict] = []
+        for index, candidate in enumerate(body.routes):
+            try:
+                points = _extract_route_points(candidate)
+                scored = risk_eval.score_route(
+                    points,
+                    mode=body.mode,
+                    predict_point=deps.predict_point,
+                    predict_point_live=deps.predict_point_live,
+                    h3_resolution=deps.h3_resolution,
+                    sample_spacing_km=body.sample_spacing_km,
+                    day_of_week=body.day_of_week,
+                    hour=body.hour,
+                    month=body.month,
+                    forecast_hours=body.forecast_hours,
+                    provider=body.provider,
+                    cell_cache=shared_cache,
+                )
+            except HTTPException as exc:
+                raise HTTPException(
+                    status_code=exc.status_code, detail=f"route[{index}]: {exc.detail}"
+                ) from exc
+            except (risk_eval.RouteConfigError, risk_eval.RouteTooLongError) as exc:
+                raise HTTPException(status_code=422, detail=f"route[{index}]: {exc}") from exc
+            except LiveWeatherProviderError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except requests.RequestException as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"weather provider request failed: {exc}",
+                ) from exc
+            candidates.append({"index": index, "label": candidate.label, **scored})
+
+        metric = "route_risk_score_mean" if objective == "mean" else "route_risk_score_max"
+        order = sorted(range(len(candidates)), key=lambda i: candidates[i][metric])
+        for position, candidate_index in enumerate(order):
+            candidates[candidate_index]["rank"] = position + 1
+            candidates[candidate_index]["recommended"] = position == 0
+        recommended_index = order[0]
+
+        result = {
+            "objective": objective,
+            "mode": candidates[0]["mode"],
+            "model_version": deps.model_version,
+            "recommended_index": recommended_index,
+            "recommended_label": candidates[recommended_index]["label"],
+            "candidates": candidates,
+        }
+        cache_control = "no-store" if result["mode"] == "live" else "public, max-age=3600"
+        if output_format.strip().lower() == "geojson":
+            return JSONResponse(
+                content=_compare_geojson(result),
                 media_type="application/geo+json",
                 headers={"Cache-Control": cache_control},
             )
