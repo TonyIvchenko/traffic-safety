@@ -23,6 +23,7 @@ from segment_support import coords_from_json
 import risk_eval
 import segment_runtime
 import sun_glare
+from watch_store import public_view
 
 API_VERSION = "1.0"
 RISK_LEVELS = ["low", "moderate", "high", "extreme"]
@@ -167,6 +168,19 @@ class RouteCompareRequest(BaseModel):
     objective: str = "mean"
 
 
+class WatchCreateRequest(BaseModel):
+    kind: str
+    params: dict = Field(default_factory=dict)
+    threshold_level: str = "high"
+    channel: str = "poll"
+    webhook_url: str | None = None
+    cooldown_minutes: int = Field(60, ge=0, le=1440)
+
+
+class WatchUpdateRequest(BaseModel):
+    active: bool
+
+
 @dataclass
 class V1Dependencies:
     service_name: str
@@ -185,6 +199,7 @@ class V1Dependencies:
     model_metrics: dict
     model_report_loader: Callable[[], dict]
     risk_cube: object
+    watch_store_provider: Callable[[], object]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -259,6 +274,53 @@ def _area_geojson(result: dict) -> dict:
         "count": result.get("count", len(features)),
         "features": features,
     }
+
+
+def _validate_watch_params(kind: str, params: dict) -> dict:
+    """Normalize/validate watch geometry params; raises 422 on bad shapes."""
+    params = dict(params or {})
+    try:
+        if kind == "point":
+            lat, lon = float(params["lat"]), float(params["lon"])
+            if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+                raise ValueError("lat/lon out of range")
+            normalized = {"lat": lat, "lon": lon}
+            normalized["forecast_hours"] = int(params.get("forecast_hours", 0))
+            if not (0 <= normalized["forecast_hours"] <= 48):
+                raise ValueError("forecast_hours must be 0-48")
+        elif kind == "route":
+            candidate = RouteCandidate(
+                waypoints=params.get("waypoints"), geojson=params.get("geojson")
+            )
+            points = _extract_route_points(candidate)
+            spacing = float(params.get("sample_spacing_km", 2.0))
+            if not (risk_eval.MIN_SPACING_KM <= spacing <= risk_eval.MAX_SPACING_KM):
+                raise ValueError("sample_spacing_km out of range")
+            normalized = {
+                "waypoints": [[lon, lat] for lon, lat in points],
+                "sample_spacing_km": spacing,
+                "forecast_hours": int(params.get("forecast_hours", 0)),
+            }
+        elif kind == "area":
+            normalized = {
+                key: float(params[key]) for key in ("min_lat", "max_lat", "min_lon", "max_lon")
+            }
+            if not (
+                -90.0 <= normalized["min_lat"] <= normalized["max_lat"] <= 90.0
+                and -180.0 <= normalized["min_lon"] <= normalized["max_lon"] <= 180.0
+            ):
+                raise ValueError("bounding box out of range")
+            normalized["limit"] = max(1, min(1000, int(params.get("limit", 100))))
+            normalized["forecast_hours"] = int(params.get("forecast_hours", 0))
+        else:
+            raise ValueError("kind must be 'point', 'route', or 'area'")
+    except HTTPException:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"invalid {kind} watch params: {exc}") from exc
+
+    normalized["provider"] = str(params.get("provider", "auto")).strip().lower()
+    return normalized
 
 
 def _annotate_route_glare(steps: list[dict], glare_datetime: str | None) -> int | None:
@@ -496,6 +558,16 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 "scope": "per_client_ip",
                 "per_minute": deps.rate_limit_per_min,
                 "enabled": deps.rate_limit_per_min is not None,
+            },
+            "watches": {
+                "enabled": True,
+                "kinds": ["point", "route", "area"],
+                "channels": ["poll", "webhook"],
+                "note": (
+                    "Watches store the submitted geometry and webhook URL until "
+                    "deleted; they are authorized only by the per-watch token "
+                    "returned at creation."
+                ),
             },
             "docs_url": "/v1/docs",
         }
@@ -890,5 +962,58 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 headers={"Cache-Control": "public, max-age=3600"},
             )
         return result
+
+    def _authorized_watch(watch_id: str, token: str) -> dict:
+        store = deps.watch_store_provider()
+        record = store.get_watch(watch_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="watch not found")
+        if store.get_watch_authorized(watch_id, token) is None:
+            raise HTTPException(status_code=403, detail="invalid watch token")
+        return record
+
+    @router.post(
+        "/watches",
+        status_code=201,
+        summary="Create a risk watch (point, route, or area); token returned once",
+    )
+    def create_watch(response: Response, body: WatchCreateRequest) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        kind = body.kind.strip().lower()
+        params = _validate_watch_params(kind, body.params)
+        _validate_provider(params["provider"])
+        try:
+            record = deps.watch_store_provider().create_watch(
+                kind=kind,
+                params=params,
+                threshold_level=body.threshold_level,
+                channel=body.channel,
+                webhook_url=body.webhook_url,
+                cooldown_minutes=body.cooldown_minutes,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return public_view(record, include_secrets=True)
+
+    @router.get("/watches/{watch_id}", summary="Watch status (the polling channel)")
+    def get_watch(response: Response, watch_id: str, token: str = Query(...)) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        return public_view(_authorized_watch(watch_id, token))
+
+    @router.patch("/watches/{watch_id}", summary="Pause or resume a watch")
+    def update_watch(
+        response: Response, watch_id: str, body: WatchUpdateRequest, token: str = Query(...)
+    ) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        _authorized_watch(watch_id, token)
+        record = deps.watch_store_provider().set_active(watch_id, token, body.active)
+        return public_view(record)
+
+    @router.delete("/watches/{watch_id}", summary="Delete a watch")
+    def delete_watch(response: Response, watch_id: str, token: str = Query(...)) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        _authorized_watch(watch_id, token)
+        deps.watch_store_provider().delete_watch(watch_id, token)
+        return {"deleted": True, "id": watch_id}
 
     return router

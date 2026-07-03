@@ -77,6 +77,7 @@ from predict import (
 )
 from api_ratelimit import install_rate_limit_middleware, rate_limiter_from_env
 from api_v1 import V1Dependencies, build_v1_router
+from watch_store import get_default_store as _get_watch_store
 
 STATIC_DIR = SRC_DIR / "static"
 STATIC_URL = "/traffic-safety-static"
@@ -1121,6 +1122,7 @@ api.include_router(
             model_metrics=dict(MODEL_BUNDLE.get("metrics", {}) or {}),
             model_report_loader=_load_model_report,
             risk_cube=OVERLAY["risk"],
+            watch_store_provider=_get_watch_store,
         )
     )
 )

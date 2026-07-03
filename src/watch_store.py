@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hmac
 import json
+import os
 from pathlib import Path
 import secrets
 import sqlite3
@@ -196,6 +197,18 @@ class WatchStore:
                 """,
                 (now, str(level), int(bool(breached)), now, int(bool(notified)), now, str(watch_id)),
             )
+
+
+_DEFAULT_STORE: WatchStore | None = None
+
+
+def get_default_store() -> WatchStore:
+    """Process-wide store; TRAFFIC_SAFETY_WATCH_DB overrides the DB path."""
+    global _DEFAULT_STORE
+    path = Path(os.getenv("TRAFFIC_SAFETY_WATCH_DB", str(DEFAULT_DB_PATH)))
+    if _DEFAULT_STORE is None or _DEFAULT_STORE.db_path != path:
+        _DEFAULT_STORE = WatchStore(path)
+    return _DEFAULT_STORE
 
 
 def public_view(record: dict, *, include_secrets: bool = False) -> dict:
