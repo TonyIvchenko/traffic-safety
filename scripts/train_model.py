@@ -55,21 +55,26 @@ class FeatureContext:
     hour_by_cell: dict[tuple[str, int], int]
 
 
-def load_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_inputs(
+    accidents_path: Path = ACCIDENTS_CLEAN_PATH,
+    candidate_cells_path: Path = CANDIDATE_CELLS_PATH,
+    cell_weather_stations_path: Path = CELL_WEATHER_STATIONS_PATH,
+    climatology_path: Path = WEATHER_CLIMATOLOGY_PATH,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     required_paths = [
-        ACCIDENTS_CLEAN_PATH,
-        CANDIDATE_CELLS_PATH,
-        CELL_WEATHER_STATIONS_PATH,
-        WEATHER_CLIMATOLOGY_PATH,
+        accidents_path,
+        candidate_cells_path,
+        cell_weather_stations_path,
+        climatology_path,
     ]
     for path in required_paths:
         if not path.exists():
             raise FileNotFoundError(f"missing {path}")
 
-    events = pd.read_csv(ACCIDENTS_CLEAN_PATH)
-    candidate_cells = pd.read_csv(CANDIDATE_CELLS_PATH)
-    cell_station_map = pd.read_csv(CELL_WEATHER_STATIONS_PATH)
-    climatology = pd.read_csv(WEATHER_CLIMATOLOGY_PATH)
+    events = pd.read_csv(accidents_path)
+    candidate_cells = pd.read_csv(candidate_cells_path)
+    cell_station_map = pd.read_csv(cell_weather_stations_path)
+    climatology = pd.read_csv(climatology_path)
 
     candidate_cells = candidate_cells.merge(
         cell_station_map[["cell_id", "station_index"]],
