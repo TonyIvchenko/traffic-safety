@@ -12,6 +12,7 @@ TRAFFIC_RAW_DIR = DATA_DIR / "raw" / "traffic"
 US_ACCIDENTS_RAW_DIR = TRAFFIC_RAW_DIR / "us_accidents"
 TIGER_RAW_DIR = TRAFFIC_RAW_DIR / "tiger"
 TIGER_PRISEC_DIR = TIGER_RAW_DIR / "prisecroads"
+CENSUS_RAW_DIR = DATA_DIR / "raw" / "census"
 NOAA_RAW_DIR = DATA_DIR / "raw" / "noaa"
 NOAA_ISD_LITE_DIR = NOAA_RAW_DIR / "isd-lite"
 PROCESSED_DIR = DATA_DIR / "processed"
@@ -124,6 +125,7 @@ def ensure_dirs() -> None:
     US_ACCIDENTS_RAW_DIR.mkdir(parents=True, exist_ok=True)
     TIGER_RAW_DIR.mkdir(parents=True, exist_ok=True)
     TIGER_PRISEC_DIR.mkdir(parents=True, exist_ok=True)
+    CENSUS_RAW_DIR.mkdir(parents=True, exist_ok=True)
     NOAA_RAW_DIR.mkdir(parents=True, exist_ok=True)
     NOAA_ISD_LITE_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
@@ -154,6 +156,25 @@ def tiger_prisecroads_url(state_fips: str, year: int = 2024) -> str:
 
 def tiger_prisecroads_path(state_fips: str, year: int = 2024) -> Path:
     return TIGER_PRISEC_DIR / f"tl_{year}_{state_fips}_prisecroads.zip"
+
+
+def tiger_county_url(year: int = 2024) -> str:
+    return f"https://www2.census.gov/geo/tiger/TIGER{year}/COUNTY/tl_{year}_us_county.zip"
+
+
+def tiger_county_path(year: int = 2024) -> Path:
+    return CENSUS_RAW_DIR / f"tl_{year}_us_county.zip"
+
+
+def tiger_tract_url(state_fips: str, year: int = 2024) -> str:
+    return (
+        f"https://www2.census.gov/geo/tiger/TIGER{year}/TRACT/"
+        f"tl_{year}_{state_fips}_tract.zip"
+    )
+
+
+def tiger_tract_path(state_fips: str, year: int = 2024) -> Path:
+    return CENSUS_RAW_DIR / f"tl_{year}_{state_fips}_tract.zip"
 
 
 def noaa_isd_lite_url(station_id: str, year: int) -> str:
