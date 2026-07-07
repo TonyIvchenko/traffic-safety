@@ -10,3 +10,4 @@ uvicorn==0.34.0
 kaggle>=1.7,<2.0
 pyshp>=2.3,<3.0
 pyarrow>=16,<21
+shapely>=2.0,<3.0
