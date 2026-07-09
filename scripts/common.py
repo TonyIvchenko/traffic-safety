@@ -19,6 +19,7 @@ PROCESSED_DIR = DATA_DIR / "processed"
 PROCESSED_WEATHER_DIR = PROCESSED_DIR / "weather"
 WEATHER_HOURLY_DIR = PROCESSED_WEATHER_DIR / "hourly"
 PROCESSED_SEGMENTS_DIR = PROCESSED_DIR / "segments"
+PROCESSED_GEO_DIR = PROCESSED_DIR / "geo"
 MODELS_DIR = SERVICE_DIR / "models"
 TILES_DIR = SERVICE_DIR / "tiles"
 
@@ -29,6 +30,8 @@ VRU_ACCIDENTS_CLEAN_PATH = PROCESSED_DIR / "vru_accidents_clean.csv.gz"
 VRU_CANDIDATE_CELLS_PATH = PROCESSED_DIR / "vru_candidate_cells.csv.gz"
 VRU_WEEKLY_COUNTS_PATH = PROCESSED_DIR / "vru_weekly_counts.csv.gz"
 VRU_MODEL_BUNDLE_PATH = MODELS_DIR / "traffic_safety_vru.joblib"
+SEGMENT_GEOID_PATH = PROCESSED_GEO_DIR / "segment_geoid.csv.gz"
+CELL_GEOID_PATH = PROCESSED_GEO_DIR / "cell_geoid.csv.gz"
 STATION_HISTORY_PATH = NOAA_RAW_DIR / "isd-history.csv"
 REPRESENTATIVE_STATIONS_PATH = PROCESSED_WEATHER_DIR / "representative_stations.csv.gz"
 CELL_WEATHER_STATIONS_PATH = PROCESSED_WEATHER_DIR / "cell_weather_stations.csv.gz"
@@ -132,6 +135,7 @@ def ensure_dirs() -> None:
     PROCESSED_WEATHER_DIR.mkdir(parents=True, exist_ok=True)
     WEATHER_HOURLY_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    PROCESSED_GEO_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     TILES_DIR.mkdir(parents=True, exist_ok=True)
 
