@@ -52,6 +52,29 @@ That pipeline writes:
 - the trained bundle at `models/traffic_safety.joblib`
 - the overlay tiles at `tiles`
 
+## Geographic Enrichment & Costs
+
+Grant, equity, and countermeasure analysis need each road segment and H3 cell
+tagged with its county and census tract, plus a way to value crashes in dollars.
+
+```bash
+conda run -n playground python scripts/download_geographies.py   # TIGER county + tract shapefiles
+conda run -n playground python scripts/build_geo_lookup.py       # centroid -> county/tract GEOID
+```
+
+That writes county/tract lookups to `data/processed/geo/`:
+
+- `segment_geoid.csv.gz` — `segment_id, county_geoid, tract_geoid`
+- `cell_geoid.csv.gz` — `cell_id, county_geoid, tract_geoid`
+
+Supporting modules:
+
+- `src/geo_lookup.py` — `county_of(lat, lon)` / `tract_of(lat, lon)` via a shapely
+  point-in-polygon index over the TIGER boundaries (requires `shapely`).
+- `src/crash_costs.py` — FHWA KABCO comprehensive crash costs (2016 USD,
+  `FHWA-SA-17-071`) plus `expected_annual_cost(...)` and `benefit_cost(...)` for
+  HSIP/SS4A benefit-cost analysis.
+
 ## Live Provider Flags
 
 Feature flags are environment-variable based:
