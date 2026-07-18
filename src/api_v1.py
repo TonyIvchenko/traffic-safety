@@ -200,6 +200,7 @@ class V1Dependencies:
     model_report_loader: Callable[[], dict]
     risk_cube: object
     watch_store_provider: Callable[[], object]
+    grant_provider: Callable[[], object]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -962,6 +963,29 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 headers={"Cache-Control": "public, max-age=3600"},
             )
         return result
+
+    @router.get(
+        "/grants/summary",
+        response_model=None,
+        summary="Headline safety-analysis summary for a jurisdiction (SS4A / HSIP)",
+    )
+    def grants_summary(
+        response: Response,
+        geoid: str = Query(
+            ..., description="jurisdiction GEOID: state (2-digit), county (5), or tract (11)"
+        ),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        summary = deps.grant_provider().summary(geoid.strip())
+        if summary is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"no grant dataset for GEOID '{geoid}'; "
+                    "run scripts/build_grant_dataset.py to generate it"
+                ),
+            )
+        return summary
 
     def _authorized_watch(watch_id: str, token: str) -> dict:
         store = deps.watch_store_provider()
