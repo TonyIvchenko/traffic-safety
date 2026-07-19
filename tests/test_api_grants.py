@@ -26,7 +26,12 @@ SAMPLE_REPORT = {
     "data_vintage": {"fars_years": [2018, 2024], "crash_source": "FARS fatal crashes"},
     "crash_summary": {"total_fatal_crashes": 42, "total_fatalities": 45, "by_year": {2022: 20}},
     "high_injury_network": {"hin_segments": 2, "length_share": 0.4, "weighted_crash_share": 0.9},
-    "hin_corridors": [{"segment_id": "a", "hin_rank": 1}, {"segment_id": "b", "hin_rank": 2}],
+    "hin_corridors": [
+        {"segment_id": "a", "fullname": "Main St", "hin_rank": 1, "hin_intensity": 5.0,
+         "length_km": 1.0, "fatal_crashes": 5.0, "center_lat": 34.05, "center_lon": -118.24},
+        {"segment_id": "b", "fullname": "1st Ave", "hin_rank": 2, "hin_intensity": 3.0,
+         "length_km": 1.0, "fatal_crashes": 3.0, "center_lat": 34.10, "center_lon": -118.30},
+    ],
     "systemic_locations": [{"segment_id": "c", "systemic_score": 0.9}],
     "methodology": {"high_injury_network": "Ranked by weighted crashes per km."},
     "data_sources": [{"name": "FARS", "publisher": "NHTSA", "use": "fatal crash counts"}],
@@ -79,3 +84,102 @@ def test_grants_summary_non_object_file_is_404_not_500(tmp_path, monkeypatch):
     (tmp_path / "06037.json").write_text("[1, 2, 3]", encoding="utf-8")
     response = TestClient(MODULE.api).get("/v1/grants/summary?geoid=06037")
     assert response.status_code == 404
+
+
+def test_grants_hin_by_geoid_json(client):
+    response = client.get("/v1/grants/hin?geoid=06037")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["geoid"] == "06037"
+    assert payload["count"] == 2
+    assert [c["segment_id"] for c in payload["corridors"]] == ["a", "b"]
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_grants_hin_by_geoid_geojson(client):
+    response = client.get("/v1/grants/hin?geoid=06037&format=geojson")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/geo+json")
+    payload = response.json()
+    assert payload["type"] == "FeatureCollection"
+    assert payload["count"] == 2
+    feature = payload["features"][0]
+    assert feature["geometry"]["type"] == "Point"
+    # GeoJSON is [lon, lat]; centroids move into geometry, not properties.
+    assert feature["geometry"]["coordinates"] == [-118.24, 34.05]
+    assert feature["properties"]["hin_rank"] == 1
+    assert "center_lat" not in feature["properties"]
+
+
+def test_grants_hin_unknown_geoid_404(client):
+    assert client.get("/v1/grants/hin?geoid=99999").status_code == 404
+
+
+def test_grants_hin_by_bbox(client):
+    over = client.get("/v1/grants/hin?min_lat=34.0&max_lat=34.2&min_lon=-118.4&max_lon=-118.2")
+    assert over.status_code == 200
+    body = over.json()
+    assert body["count"] == 2
+    assert {c["segment_id"] for c in body["corridors"]} == {"a", "b"}
+    # A bbox elsewhere returns an empty collection (not a 404).
+    empty = client.get("/v1/grants/hin?min_lat=40.0&max_lat=41.0&min_lon=-100.0&max_lon=-99.0")
+    assert empty.status_code == 200
+    assert empty.json()["count"] == 0
+
+
+def test_grants_hin_requires_geoid_or_bbox(client):
+    assert client.get("/v1/grants/hin").status_code == 422
+
+
+def test_grants_hin_partial_bbox_is_422(client):
+    assert client.get("/v1/grants/hin?min_lat=34.0").status_code == 422
+
+
+def test_grants_hin_inverted_bbox_is_422(client):
+    response = client.get(
+        "/v1/grants/hin?min_lat=34.2&max_lat=34.0&min_lon=-118.4&max_lon=-118.2"
+    )
+    assert response.status_code == 422
+
+
+def test_grants_hin_top_n_caps_results(client):
+    response = client.get("/v1/grants/hin?geoid=06037&top_n=1")
+    assert response.json()["count"] == 1
+
+
+def test_grants_hin_bbox_malformed_corridor_is_200_not_500(tmp_path, monkeypatch):
+    # A dropped-in file with a non-dict corridor and a non-numeric centroid must
+    # degrade (skip the bad rows), not crash the bbox scan.
+    monkeypatch.setenv("TRAFFIC_SAFETY_GRANT_DIR", str(tmp_path))
+    report = {
+        "jurisdiction": {"geoid": "06037", "name": "LA", "level": "county"},
+        "hin_corridors": [
+            {"segment_id": "a", "hin_intensity": 5.0, "center_lat": 34.05, "center_lon": -118.24},
+            "oops",
+            {"segment_id": "x", "hin_intensity": "high", "center_lat": "north", "center_lon": -118.3},
+        ],
+    }
+    (tmp_path / "06037.json").write_text(json.dumps(report), encoding="utf-8")
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/grants/hin?min_lat=34.0&max_lat=34.2&min_lon=-118.4&max_lon=-118.2")
+    assert response.status_code == 200
+    assert [c["segment_id"] for c in response.json()["corridors"]] == ["a"]
+
+
+def test_grants_hin_geoid_geojson_malformed_corridor_is_200_not_500(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRAFFIC_SAFETY_GRANT_DIR", str(tmp_path))
+    report = {
+        "jurisdiction": {"geoid": "06037", "name": "LA", "level": "county"},
+        "hin_corridors": [
+            None,  # non-dict
+            {"segment_id": "bad", "center_lat": "n/a", "center_lon": -118.3},  # non-numeric
+            {"segment_id": "good", "center_lat": 34.05, "center_lon": -118.24},
+        ],
+    }
+    (tmp_path / "06037.json").write_text(json.dumps(report), encoding="utf-8")
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/grants/hin?geoid=06037&format=geojson")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["features"][0]["properties"]["segment_id"] == "good"

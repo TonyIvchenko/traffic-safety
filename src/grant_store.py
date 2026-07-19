@@ -23,7 +23,30 @@ GEOID_MAX_LEN = 11  # 2=state, 5=county, 11=tract
 
 def valid_geoid(geoid: str) -> bool:
     text = str(geoid)
-    return text.isdigit() and 1 <= len(text) <= GEOID_MAX_LEN
+    return text.isascii() and text.isdigit() and 1 <= len(text) <= GEOID_MAX_LEN
+
+
+def _as_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def corridor_in_bbox(corridor, bbox) -> bool:
+    """True when a corridor's centroid lies within ``(min_lat, max_lat, min_lon, max_lon)``.
+
+    Malformed corridors (non-dict, or missing/non-numeric centroid) are skipped
+    rather than raising — the store degrades on bad dropped-in files.
+    """
+    if not isinstance(corridor, dict):
+        return False
+    min_lat, max_lat, min_lon, max_lon = bbox
+    lat = _as_float(corridor.get("center_lat"))
+    lon = _as_float(corridor.get("center_lon"))
+    if lat is None or lon is None:
+        return False
+    return min_lat <= lat <= max_lat and min_lon <= lon <= max_lon
 
 
 def summarize(report: dict) -> dict:
@@ -75,6 +98,40 @@ class GrantStore:
     def summary(self, geoid: str) -> dict | None:
         report = self.get_report(geoid)
         return summarize(report) if report is not None else None
+
+    def hin_corridors(self, geoid: str) -> list[dict] | None:
+        """The county's High Injury Network corridors (report order), or None."""
+        report = self.get_report(geoid)
+        if report is None:
+            return None
+        return list(report.get("hin_corridors", []) or [])
+
+    def iter_reports(self):
+        for geoid in self.available_geoids():
+            report = self.get_report(geoid)
+            if report is not None:
+                yield geoid, report
+
+    def hin_corridors_in_bbox(self, bbox, *, top_n: int | None = None) -> list[dict]:
+        """HIN corridors across all counties whose centroid falls in ``bbox``.
+
+        Ranked by severity intensity (crashes/km) so results are comparable
+        across jurisdictions; each corridor is tagged with its ``geoid``. Reads
+        every county file — the F1.12 index parquet is the fast-serving path.
+        """
+        collected: list[dict] = []
+        for geoid, report in self.iter_reports():
+            jurisdiction = report.get("jurisdiction", {}) or {}
+            report_geoid = jurisdiction.get("geoid", geoid)
+            for corridor in report.get("hin_corridors", []) or []:
+                if corridor_in_bbox(corridor, bbox):
+                    collected.append({**corridor, "geoid": report_geoid})
+        # corridor_in_bbox already guaranteed every entry is a dict; coerce the
+        # ranking key defensively so a non-numeric hin_intensity ranks last, not 500s.
+        collected.sort(key=lambda corridor: -(_as_float(corridor.get("hin_intensity")) or 0.0))
+        if top_n is not None:
+            collected = collected[: int(top_n)]
+        return collected
 
 
 def get_default_store() -> GrantStore:

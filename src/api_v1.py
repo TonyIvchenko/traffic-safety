@@ -500,6 +500,40 @@ def _route_geojson(result: dict) -> dict:
     }
 
 
+def _safe_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _grants_hin_geojson(corridors: list[dict]) -> dict:
+    """Point features at HIN corridor centroids (the grant report stores no line
+    geometry); all non-coordinate fields become feature properties. Corridors
+    that are malformed (non-dict, or missing/non-numeric centroid) are skipped so
+    a bad dropped-in file degrades rather than 500s."""
+    features = []
+    for corridor in corridors:
+        if not isinstance(corridor, dict):
+            continue
+        lat = _safe_float(corridor.get("center_lat"))
+        lon = _safe_float(corridor.get("center_lon"))
+        if lat is None or lon is None:
+            continue
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    key: value
+                    for key, value in corridor.items()
+                    if key not in ("center_lat", "center_lon")
+                },
+            }
+        )
+    return {"type": "FeatureCollection", "count": len(features), "features": features}
+
+
 def build_v1_router(deps: V1Dependencies) -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["v1"])
 
@@ -986,6 +1020,61 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 ),
             )
         return summary
+
+    @router.get(
+        "/grants/hin",
+        response_model=None,
+        summary="High Injury Network corridors for a jurisdiction or bbox (JSON or GeoJSON)",
+    )
+    def grants_hin(
+        response: Response,
+        geoid: str | None = Query(None, description="jurisdiction GEOID (takes precedence over bbox)"),
+        min_lat: float | None = Query(None, ge=-90.0, le=90.0),
+        max_lat: float | None = Query(None, ge=-90.0, le=90.0),
+        min_lon: float | None = Query(None, ge=-180.0, le=180.0),
+        max_lon: float | None = Query(None, ge=-180.0, le=180.0),
+        top_n: int = Query(100, ge=1, le=1000),
+        output_format: str = Query("json", alias="format", description="'json' or 'geojson'"),
+    ):
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        store = deps.grant_provider()
+        bbox_values = (min_lat, max_lat, min_lon, max_lon)
+
+        if geoid:
+            corridors = store.hin_corridors(geoid.strip())
+            if corridors is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"no grant dataset for GEOID '{geoid}'; "
+                        "run scripts/build_grant_dataset.py to generate it"
+                    ),
+                )
+            corridors = corridors[:top_n]
+            scope = {"geoid": geoid.strip()}
+        elif any(value is not None for value in bbox_values):
+            if any(value is None for value in bbox_values):
+                raise HTTPException(
+                    status_code=422,
+                    detail="bbox requires all of min_lat, max_lat, min_lon, max_lon",
+                )
+            if min_lat > max_lat or min_lon > max_lon:
+                raise HTTPException(status_code=422, detail="bbox min must be <= max")
+            corridors = store.hin_corridors_in_bbox(bbox_values, top_n=top_n)
+            scope = {"bbox": [min_lat, max_lat, min_lon, max_lon]}
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="provide a geoid or a bounding box (min_lat, max_lat, min_lon, max_lon)",
+            )
+
+        if output_format.strip().lower() == "geojson":
+            return JSONResponse(
+                content=_grants_hin_geojson(corridors),
+                media_type="application/geo+json",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+        return {**scope, "count": len(corridors), "corridors": corridors}
 
     def _authorized_watch(watch_id: str, token: str) -> dict:
         store = deps.watch_store_provider()

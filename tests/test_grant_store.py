@@ -11,14 +11,21 @@ if str(SRC_DIR) not in sys.path:
 import grant_store
 
 
-def _report(geoid="06037", name="Los Angeles County") -> dict:
+def _report(geoid="06037", name="Los Angeles County", corridors=None) -> dict:
+    if corridors is None:
+        corridors = [
+            {"segment_id": "a", "hin_rank": 1, "hin_intensity": 5.0,
+             "center_lat": 34.05, "center_lon": -118.24},
+            {"segment_id": "b", "hin_rank": 2, "hin_intensity": 3.0,
+             "center_lat": 34.10, "center_lon": -118.30},
+        ]
     return {
         "jurisdiction": {"geoid": geoid, "name": name, "level": "county"},
         "generated_at_utc": "2026-07-14T00:00:00+00:00",
         "data_vintage": {"fars_years": [2018, 2024]},
         "crash_summary": {"total_fatal_crashes": 42, "total_fatalities": 45},
         "high_injury_network": {"hin_segments": 2, "length_share": 0.4, "weighted_crash_share": 0.9},
-        "hin_corridors": [{"segment_id": "a"}, {"segment_id": "b"}],
+        "hin_corridors": corridors,
         "systemic_locations": [{"segment_id": "c"}],
     }
 
@@ -116,3 +123,70 @@ def test_get_default_store_honors_env(tmp_path, monkeypatch):
     store = grant_store.get_default_store()
     assert store.directory == tmp_path
     assert store.get_report("06037") is not None
+
+
+def test_corridor_in_bbox():
+    bbox = (34.0, 34.2, -118.4, -118.2)
+    assert grant_store.corridor_in_bbox({"center_lat": 34.05, "center_lon": -118.24}, bbox)
+    assert not grant_store.corridor_in_bbox({"center_lat": 40.0, "center_lon": -118.24}, bbox)
+    # Missing coordinates never match (no crash).
+    assert not grant_store.corridor_in_bbox({"segment_id": "x"}, bbox)
+
+
+def test_hin_corridors_returns_report_order(tmp_path):
+    _write(tmp_path, _report("06037"))
+    store = grant_store.GrantStore(tmp_path)
+    corridors = store.hin_corridors("06037")
+    assert [c["segment_id"] for c in corridors] == ["a", "b"]
+
+
+def test_hin_corridors_missing_returns_none(tmp_path):
+    store = grant_store.GrantStore(tmp_path)
+    assert store.hin_corridors("99999") is None
+
+
+def test_hin_corridors_in_bbox_filters_and_ranks_by_intensity(tmp_path):
+    _write(tmp_path, _report("06037"))  # a@(34.05,-118.24) i=5, b@(34.10,-118.30) i=3
+    _write(tmp_path, _report(
+        "06059", "Orange County",
+        corridors=[{"segment_id": "d", "hin_rank": 1, "hin_intensity": 9.0,
+                    "center_lat": 33.70, "center_lon": -117.80}],
+    ))
+    store = grant_store.GrantStore(tmp_path)
+    # Bbox over LA only -> a, b; ranked by intensity desc; tagged with geoid.
+    la = store.hin_corridors_in_bbox((34.0, 34.2, -118.4, -118.2))
+    assert [c["segment_id"] for c in la] == ["a", "b"]
+    assert all(c["geoid"] == "06037" for c in la)
+    # Wider bbox includes Orange County's d (intensity 9) -> ranked first.
+    both = store.hin_corridors_in_bbox((33.0, 35.0, -119.0, -117.0))
+    assert [c["segment_id"] for c in both] == ["d", "a", "b"]
+
+
+def test_hin_corridors_in_bbox_respects_top_n(tmp_path):
+    _write(tmp_path, _report("06037"))
+    store = grant_store.GrantStore(tmp_path)
+    assert len(store.hin_corridors_in_bbox((34.0, 34.2, -118.4, -118.2), top_n=1)) == 1
+
+
+def test_corridor_in_bbox_rejects_malformed():
+    bbox = (34.0, 34.2, -118.4, -118.2)
+    assert not grant_store.corridor_in_bbox("oops", bbox)  # non-dict
+    assert not grant_store.corridor_in_bbox({"center_lat": "north", "center_lon": -118.3}, bbox)
+    assert not grant_store.corridor_in_bbox({"center_lat": [1], "center_lon": -118.3}, bbox)
+
+
+def test_hin_corridors_in_bbox_skips_malformed_corridors(tmp_path):
+    # A bad corridor in ANY county file must not 500 the whole bbox scan.
+    _write(tmp_path, _report(
+        "06037",
+        corridors=[
+            {"segment_id": "a", "hin_intensity": 5.0, "center_lat": 34.05, "center_lon": -118.24},
+            "oops",  # non-dict entry
+            {"segment_id": "x", "hin_intensity": 9.0, "center_lat": "north", "center_lon": -118.3},
+            {"segment_id": "y", "hin_intensity": "high", "center_lat": 34.11, "center_lon": -118.29},
+        ],
+    ))
+    store = grant_store.GrantStore(tmp_path)
+    result = store.hin_corridors_in_bbox((34.0, 34.2, -118.4, -118.2))
+    # 'a' (5.0) and 'y' (non-numeric intensity -> 0.0) kept; 'oops' and 'x' skipped.
+    assert [c["segment_id"] for c in result] == ["a", "y"]
