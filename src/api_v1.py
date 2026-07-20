@@ -14,10 +14,11 @@ import math
 from typing import Callable, Sequence
 
 from fastapi import APIRouter, HTTPException, Query, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 import requests
 
+import grant_html
 from live_weather import LiveWeatherProviderError
 from segment_support import coords_from_json
 import risk_eval
@@ -1075,6 +1076,38 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 headers={"Cache-Control": "public, max-age=3600"},
             )
         return {**scope, "count": len(corridors), "corridors": corridors}
+
+    @router.get(
+        "/grants/report",
+        response_model=None,
+        summary="Full downloadable safety-analysis report for a jurisdiction (JSON or HTML)",
+    )
+    def grants_report(
+        response: Response,
+        geoid: str = Query(..., description="jurisdiction GEOID: state (2), county (5), or tract (11)"),
+        output_format: str = Query("json", alias="format", description="'json' or 'html'"),
+    ):
+        report = deps.grant_provider().get_report(geoid.strip())
+        if report is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"no grant dataset for GEOID '{geoid}'; "
+                    "run scripts/build_grant_dataset.py to generate it"
+                ),
+            )
+        if output_format.strip().lower() == "html":
+            # geoid reached here only via valid_geoid (digits) -> safe filename.
+            filename = f"safety-analysis-{geoid.strip()}.html"
+            return HTMLResponse(
+                content=grant_html.render_report(report),
+                headers={
+                    "Cache-Control": "public, max-age=3600",
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                },
+            )
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        return report
 
     def _authorized_watch(watch_id: str, token: str) -> dict:
         store = deps.watch_store_provider()

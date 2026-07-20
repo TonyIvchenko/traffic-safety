@@ -183,3 +183,61 @@ def test_grants_hin_geoid_geojson_malformed_corridor_is_200_not_500(tmp_path, mo
     payload = response.json()
     assert payload["count"] == 1
     assert payload["features"][0]["properties"]["segment_id"] == "good"
+
+
+def test_grants_report_json_returns_full_report(client):
+    response = client.get("/v1/grants/report?geoid=06037")
+    assert response.status_code == 200
+    payload = response.json()
+    # The full report (not the compact summary): tables + methodology present.
+    assert payload["jurisdiction"]["name"] == "Los Angeles County"
+    assert isinstance(payload["hin_corridors"], list) and len(payload["hin_corridors"]) == 2
+    assert "methodology" in payload
+    assert "data_sources" in payload
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_grants_report_html_is_downloadable_document(client):
+    response = client.get("/v1/grants/report?geoid=06037&format=html")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="safety-analysis-06037.html"'
+    )
+    body = response.text
+    assert body.startswith("<!doctype html>")
+    assert "Los Angeles County" in body
+
+
+def test_grants_report_unknown_geoid_404(client):
+    assert client.get("/v1/grants/report?geoid=99999").status_code == 404
+
+
+def test_grants_report_requires_geoid(client):
+    assert client.get("/v1/grants/report").status_code == 422
+
+
+def test_grants_report_unknown_format_defaults_to_json(client):
+    # Matches the sibling json/geojson convention: only the special format is
+    # special-cased; anything else falls through to JSON.
+    response = client.get("/v1/grants/report?geoid=06037&format=xml")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["jurisdiction"]["geoid"] == "06037"
+
+
+def test_grants_report_html_malformed_report_is_200_not_500(tmp_path, monkeypatch):
+    # A structurally malformed dropped-in report must still render (degraded),
+    # never crash the HTML path with a 500.
+    monkeypatch.setenv("TRAFFIC_SAFETY_GRANT_DIR", str(tmp_path))
+    report = {
+        "jurisdiction": {"geoid": "06037", "name": "LA", "level": "county"},
+        "crash_summary": {"by_year": {"2022": None}},  # non-numeric value
+        "hin_corridors": [{"hin_rank": 1, "fullname": "Main St"}, None],  # non-dict row
+        "systemic_locations": "nope",  # wrong container type
+        "data_sources": [42],  # non-dict row
+    }
+    (tmp_path / "06037.json").write_text(json.dumps(report), encoding="utf-8")
+    response = TestClient(MODULE.api).get("/v1/grants/report?geoid=06037&format=html")
+    assert response.status_code == 200
+    assert response.text.startswith("<!doctype html>")

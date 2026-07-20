@@ -56,6 +56,16 @@ def _esc(value) -> str:
     return html.escape(str(value))
 
 
+def _as_dict(value) -> dict:
+    """A section coerced to a dict — a malformed report degrades, never crashes."""
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value) -> list:
+    """A section coerced to a list of dict rows (non-dict entries dropped)."""
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
 def _int(value) -> str:
     try:
         return f"{int(round(float(value))):,}"
@@ -106,9 +116,16 @@ def bar_chart_svg(pairs, *, width: int = 520, height: int = 200, pad: int = 32, 
     """Inline SVG vertical bar chart from ``(label, value)`` pairs.
 
     Returns a valid ``<svg>`` for any input, including an empty list (renders a
-    'No data' placeholder rather than dividing by zero).
+    'No data' placeholder rather than dividing by zero). Non-numeric values are
+    dropped so a malformed report never raises here.
     """
-    pairs = [(str(label), float(value)) for label, value in pairs]
+    clean: list[tuple[str, float]] = []
+    for label, value in pairs:
+        try:
+            clean.append((str(label), float(value)))
+        except (TypeError, ValueError):
+            continue
+    pairs = clean
     if not pairs:
         return (
             f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{_esc(title or "chart")}">'
@@ -141,10 +158,11 @@ def bar_chart_svg(pairs, *, width: int = 520, height: int = 200, pad: int = 32, 
 
 
 def _header_section(report: dict) -> str:
-    jur = report.get("jurisdiction", {})
+    jur = _as_dict(report.get("jurisdiction"))
     level = _LEVEL_LABEL.get(str(jur.get("level")), "Area")
-    vintage = report.get("data_vintage", {}) or {}
-    years = vintage.get("fars_years") or []
+    vintage = _as_dict(report.get("data_vintage"))
+    years = vintage.get("fars_years")
+    years = years if isinstance(years, list) else []
     year_span = f"{years[0]}–{years[-1]}" if len(years) >= 2 else (str(years[0]) if years else "—")
     generated = report.get("generated_at_utc")
     meta_bits = [f"Crash years {year_span}"]
@@ -163,8 +181,8 @@ def _header_section(report: dict) -> str:
 
 
 def _summary_section(report: dict) -> str:
-    summary = report.get("crash_summary", {}) or {}
-    by_mode = summary.get("by_mode", {}) or {}
+    summary = _as_dict(report.get("crash_summary"))
+    by_mode = _as_dict(summary.get("by_mode"))
     cards = [
         ("Fatal crashes", _int(summary.get("total_fatal_crashes", 0))),
         ("Fatalities", _int(summary.get("total_fatalities", 0))),
@@ -178,8 +196,15 @@ def _summary_section(report: dict) -> str:
         f'<div class="label">{_esc(label)}</div></div>'
         for label, value in cards
     )
-    by_year = summary.get("by_year", {}) or {}
-    pairs = [(str(year), by_year[year]) for year in sorted(by_year, key=lambda y: int(y))]
+    by_year = _as_dict(summary.get("by_year"))
+
+    def _year_key(year):
+        try:
+            return (0, int(year))
+        except (TypeError, ValueError):
+            return (1, str(year))
+
+    pairs = [(str(year), by_year[year]) for year in sorted(by_year, key=_year_key)]
     chart = bar_chart_svg(pairs, title="Fatal crashes by year")
     return (
         '<section id="summary"><h2>Crash summary</h2>'
@@ -190,8 +215,8 @@ def _summary_section(report: dict) -> str:
 
 
 def _hin_section(report: dict) -> str:
-    hin = report.get("high_injury_network", {}) or {}
-    corridors = report.get("hin_corridors", []) or []
+    hin = _as_dict(report.get("high_injury_network"))
+    corridors = _as_list(report.get("hin_corridors"))
     if hin:
         lede = (
             f"The High Injury Network is <strong>{_esc(_int(hin.get('hin_segments', 0)))}</strong> "
@@ -224,7 +249,7 @@ def _hin_section(report: dict) -> str:
 
 
 def _systemic_section(report: dict) -> str:
-    locations = report.get("systemic_locations", []) or []
+    locations = _as_list(report.get("systemic_locations"))
     rows = [
         [
             location.get("fullname") or "Unnamed road",
@@ -250,7 +275,7 @@ def _systemic_section(report: dict) -> str:
 
 
 def _benefit_cost_section(report: dict) -> str:
-    bc = report.get("benefit_cost")
+    bc = _as_dict(report.get("benefit_cost"))
     if not bc:
         return ""
     rows = [
@@ -267,7 +292,7 @@ def _benefit_cost_section(report: dict) -> str:
 
 
 def _methodology_section(report: dict) -> str:
-    methodology = report.get("methodology", {}) or {}
+    methodology = _as_dict(report.get("methodology"))
     if not methodology:
         return ""
     items = "".join(
@@ -278,15 +303,21 @@ def _methodology_section(report: dict) -> str:
 
 
 def _sources_section(report: dict) -> str:
-    sources = report.get("data_sources", []) or []
+    sources = _as_list(report.get("data_sources"))
     rows = [[src.get("name", ""), src.get("publisher", ""), src.get("use", "")] for src in sources]
     table = _html_table(["Dataset", "Publisher", "Use"], rows, empty="No data sources listed.")
     return f'<section id="sources"><h2>Data sources</h2>{table}</section>'
 
 
 def render_report(report: dict) -> str:
-    """Render a full, self-contained HTML document for a grant report dict."""
-    jur = report.get("jurisdiction", {})
+    """Render a full, self-contained HTML document for a grant report dict.
+
+    Tolerant of malformed input: missing or wrong-typed sections degrade to
+    empty/placeholder output rather than raising, so serving an operator's
+    dropped-in file can never turn into an HTTP 500.
+    """
+    report = _as_dict(report)
+    jur = _as_dict(report.get("jurisdiction"))
     title = f"Roadway Safety Analysis — {jur.get('name', jur.get('geoid', 'Area'))}"
     body = "".join(
         section
