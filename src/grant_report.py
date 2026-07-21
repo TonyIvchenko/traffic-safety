@@ -35,7 +35,19 @@ METHODOLOGY = {
     ),
     "severity_basis": "FARS fatal crashes (KABCO 'K').",
     "crash_costs": crash_costs.COST_SOURCE,
+    "benefit_cost": (
+        "Benefit-cost of treating the High Injury Network applies a placeholder "
+        "crash-reduction factor to the comprehensive cost of fatal crashes on the "
+        "treated corridors, discounted over the treatment service life; corridor-"
+        "specific Crash Modification Factors replace the placeholder in the "
+        "countermeasures analysis."
+    ),
 }
+
+# Placeholder benefit-cost assumptions until the countermeasures feature swaps in
+# Crash Modification Factors and treatment-specific costs.
+DEFAULT_HIN_CRASH_REDUCTION = 0.30  # fraction of fatal crashes avoided by treatment
+DEFAULT_TREATMENT_COST_PER_KM = 200_000.0  # order-of-magnitude corridor safety package
 
 DATA_SOURCES = [
     {"name": "FARS", "publisher": "NHTSA", "use": "fatal crash locations and counts"},
@@ -55,6 +67,14 @@ _SYSTEMIC_FIELDS = [
     "systemic_score", "systemic_rate", "systemic_expected_crashes",
     "center_lat", "center_lon",
 ]
+
+
+def _to_float(value, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return default if math.isnan(number) else number
 
 
 def _clean_value(value):
@@ -132,6 +152,57 @@ def top_systemic_locations(
     if "fatal_crashes" in segments.columns:
         candidates = segments[segments["fatal_crashes"].astype(float) <= float(max_history)]
     return _records(candidates, _SYSTEMIC_FIELDS, top_n=top_n, sort_by="systemic_score")
+
+
+def hin_benefit_cost(
+    corridors: list[dict],
+    *,
+    analysis_years: int,
+    crash_reduction: float = DEFAULT_HIN_CRASH_REDUCTION,
+    treatment_cost_per_km: float = DEFAULT_TREATMENT_COST_PER_KM,
+    service_life_years: int | None = None,
+    discount_rate: float | None = None,
+    fatal_cost: float | None = None,
+) -> dict | None:
+    """Benefit-cost of treating the given HIN corridors.
+
+    Annualizes the corridors' recorded fatal crashes over ``analysis_years``,
+    values them at the FHWA comprehensive fatal-crash cost, applies a placeholder
+    ``crash_reduction`` (until CMFs land), and compares the discounted benefit to
+    a length-scaled treatment cost. Returns ``None`` when there is nothing to
+    treat (no corridors or a non-positive analysis window).
+    """
+    corridors = [corridor for corridor in corridors if isinstance(corridor, dict)]
+    years = int(analysis_years)
+    if not corridors or years <= 0:
+        return None
+
+    fatal_crash_cost = crash_costs.severity_cost("K") if fatal_cost is None else float(fatal_cost)
+    service_life = (
+        crash_costs.DEFAULT_SERVICE_LIFE_YEARS if service_life_years is None else int(service_life_years)
+    )
+    rate = crash_costs.DEFAULT_DISCOUNT_RATE if discount_rate is None else float(discount_rate)
+
+    total_fatal = sum(_to_float(corridor.get("fatal_crashes")) for corridor in corridors)
+    total_length = sum(_to_float(corridor.get("length_km")) for corridor in corridors)
+    annual_fatal = total_fatal / years
+    annual_reduction = annual_fatal * fatal_crash_cost * float(crash_reduction)
+    treatment_cost = total_length * float(treatment_cost_per_km)
+
+    result = crash_costs.benefit_cost(annual_reduction, treatment_cost, service_life, rate)
+    result.update(
+        {
+            "treated_corridors": len(corridors),
+            "treated_length_km": round(total_length, 3),
+            "annual_fatal_crashes_treated": round(annual_fatal, 4),
+            "crash_reduction_factor": float(crash_reduction),
+            "treatment_cost_per_km": float(treatment_cost_per_km),
+            "analysis_years": years,
+            "fatal_crash_cost": fatal_crash_cost,
+            "basis": "placeholder crash reduction pending countermeasure CMFs",
+        }
+    )
+    return result
 
 
 def assemble_grant_report(

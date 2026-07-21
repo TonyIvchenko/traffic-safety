@@ -5,11 +5,13 @@ from pathlib import Path
 import sys
 
 import pandas as pd
+import pytest
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+import crash_costs
 import grant_report as gr
 
 
@@ -108,3 +110,50 @@ def test_assemble_report_omits_benefit_cost_when_absent():
         geoid="06037", name="LA", crashes=_crashes(), segments=_segments()
     )
     assert "benefit_cost" not in report
+
+
+def _corridors():
+    return [
+        {"segment_id": "a", "fatal_crashes": 10.0, "length_km": 1.0},
+        {"segment_id": "b", "fatal_crashes": 5.0, "length_km": 1.0},
+    ]
+
+
+def test_hin_benefit_cost_computes_ratio_and_inputs():
+    result = gr.hin_benefit_cost(_corridors(), analysis_years=5)
+    # 15 fatal crashes / 5 years = 3.0/yr; reduction 0.30 of the KABCO-K cost.
+    fatal_cost = crash_costs.severity_cost("K")
+    assert result["annual_fatal_crashes_treated"] == pytest.approx(3.0)
+    assert result["annual_benefit"] == pytest.approx(3.0 * fatal_cost * 0.30)
+    assert result["treated_corridors"] == 2
+    assert result["treated_length_km"] == pytest.approx(2.0)
+    assert result["treatment_cost"] == pytest.approx(2.0 * gr.DEFAULT_TREATMENT_COST_PER_KM)
+    assert result["analysis_years"] == 5
+    assert result["benefit_cost_ratio"] > 0
+
+
+def test_hin_benefit_cost_empty_or_zero_years_returns_none():
+    assert gr.hin_benefit_cost([], analysis_years=5) is None
+    assert gr.hin_benefit_cost(_corridors(), analysis_years=0) is None
+
+
+def test_hin_benefit_cost_reduction_scales_benefit_linearly():
+    low = gr.hin_benefit_cost(_corridors(), analysis_years=5, crash_reduction=0.20)
+    high = gr.hin_benefit_cost(_corridors(), analysis_years=5, crash_reduction=0.40)
+    assert high["annual_benefit"] == pytest.approx(2.0 * low["annual_benefit"])
+
+
+def test_hin_benefit_cost_skips_non_dict_and_bad_values():
+    corridors = [
+        {"segment_id": "a", "fatal_crashes": 10.0, "length_km": 1.0},
+        "oops",  # non-dict -> ignored
+        {"segment_id": "b", "fatal_crashes": None, "length_km": "bad"},  # coerced to 0
+    ]
+    result = gr.hin_benefit_cost(corridors, analysis_years=5)
+    assert result["treated_corridors"] == 2  # only the two dicts
+    assert result["annual_fatal_crashes_treated"] == pytest.approx(2.0)  # 10/5, bad->0
+    assert result["treated_length_km"] == pytest.approx(1.0)
+
+
+def test_hin_benefit_cost_is_json_serializable():
+    json.dumps(gr.hin_benefit_cost(_corridors(), analysis_years=5))

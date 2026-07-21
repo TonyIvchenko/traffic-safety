@@ -42,7 +42,13 @@ if str(SRC_DIR) not in sys.path:
 
 import systemic
 from geo_lookup import load_county_index
-from grant_report import assemble_grant_report
+from grant_report import (
+    DEFAULT_HIN_CRASH_REDUCTION,
+    DEFAULT_TREATMENT_COST_PER_KM,
+    assemble_grant_report,
+    hin_benefit_cost,
+    top_hin_corridors,
+)
 
 from common import (
     ACCIDENTS_CLEAN_PATH,
@@ -114,12 +120,16 @@ def build_county_reports(
     min_fatal_crashes: int = 1,
     generated_at: str | None = None,
     data_vintage: dict | None = None,
+    analysis_years: int | None = None,
+    benefit_cost_config: dict | None = None,
 ) -> dict[str, dict]:
     """One assembled grant report per county present in the tagged frames.
 
     ``segments`` and ``crashes`` must both carry ``geoid_col``; rows with no
     county (point outside every boundary) are dropped by the groupby. A county
     is emitted only when its fatal-crash count reaches ``min_fatal_crashes``.
+    When ``analysis_years`` is given, each report includes the benefit-cost of
+    treating its top-N HIN corridors.
     """
     names = names or {}
     seg_groups = (
@@ -140,11 +150,19 @@ def build_county_reports(
         county_crashes = crash_groups.get(geoid, empty_crashes)
         if len(county_crashes) < int(min_fatal_crashes):
             continue
+        county_segments = seg_groups.get(geoid, empty_segments)
+        benefit_cost = None
+        if analysis_years:
+            corridors = top_hin_corridors(county_segments, top_n=top_n)
+            benefit_cost = hin_benefit_cost(
+                corridors, analysis_years=analysis_years, **(benefit_cost_config or {})
+            )
         reports[geoid] = assemble_grant_report(
             geoid=geoid,
             name=names.get(geoid, geoid),
             crashes=county_crashes,
-            segments=seg_groups.get(geoid, empty_segments),
+            segments=county_segments,
+            benefit_cost=benefit_cost,
             top_n=top_n,
             generated_at=generated_at,
             data_vintage=data_vintage,
@@ -163,12 +181,26 @@ def write_county_reports(reports: dict[str, dict], out_dir) -> list[Path]:
     return written
 
 
+def analysis_span_years(crashes: pd.DataFrame) -> int:
+    """Number of calendar years the fatal-crash counts span (for annualization)."""
+    years = crash_years(crashes)
+    return (years[-1] - years[0] + 1) if years else 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--top-n", type=int, default=10, help="corridors/locations per report")
     parser.add_argument("--min-fatal-crashes", type=int, default=1)
     parser.add_argument("--counties", nargs="*", default=None, help="limit to these county GEOIDs")
     parser.add_argument("--output-dir", type=Path, default=GRANT_DIR)
+    parser.add_argument(
+        "--crash-reduction", type=float, default=DEFAULT_HIN_CRASH_REDUCTION,
+        help="placeholder fraction of fatal crashes avoided by treating a HIN corridor",
+    )
+    parser.add_argument(
+        "--treatment-cost-per-km", type=float, default=DEFAULT_TREATMENT_COST_PER_KM,
+        help="assumed corridor treatment cost per km for benefit-cost",
+    )
     return parser.parse_args()
 
 
@@ -216,6 +248,11 @@ def main() -> None:
         min_fatal_crashes=args.min_fatal_crashes,
         generated_at=datetime.now(timezone.utc).isoformat(),
         data_vintage=data_vintage(crashes),
+        analysis_years=analysis_span_years(crashes),
+        benefit_cost_config={
+            "crash_reduction": args.crash_reduction,
+            "treatment_cost_per_km": args.treatment_cost_per_km,
+        },
     )
     written = write_county_reports(reports, args.output_dir)
     print(f"wrote {len(written)} county grant datasets to {args.output_dir}")

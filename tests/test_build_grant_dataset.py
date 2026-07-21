@@ -124,6 +124,26 @@ def test_build_county_reports_json_serializable():
         json.dumps(report)  # raises if a numpy scalar leaked through
 
 
+def test_analysis_span_years():
+    assert bgd.analysis_span_years(_crashes()) == 2  # 2022..2023 inclusive
+    assert bgd.analysis_span_years(pd.DataFrame({"year": []})) == 0
+
+
+def test_build_county_reports_includes_benefit_cost_with_analysis_years():
+    reports = bgd.build_county_reports(_segments(), _crashes(), analysis_years=5)
+    benefit_cost = reports["06037"]["benefit_cost"]
+    assert benefit_cost is not None
+    assert benefit_cost["treated_corridors"] == 2  # a, b are HIN in 06037
+    assert benefit_cost["analysis_years"] == 5
+    assert "benefit_cost_ratio" in benefit_cost
+    json.dumps(reports["06037"])  # still serializable
+
+
+def test_build_county_reports_omits_benefit_cost_without_analysis_years():
+    reports = bgd.build_county_reports(_segments(), _crashes())
+    assert "benefit_cost" not in reports["06037"]
+
+
 def test_write_county_reports_round_trips(tmp_path):
     reports = bgd.build_county_reports(_segments(), _crashes())
     written = bgd.write_county_reports(reports, tmp_path)
