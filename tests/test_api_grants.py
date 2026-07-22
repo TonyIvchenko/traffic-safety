@@ -45,6 +45,24 @@ def client(tmp_path, monkeypatch):
     return TestClient(MODULE.api)
 
 
+def test_meta_advertises_grants(client):
+    payload = client.get("/v1/meta").json()
+    grants = payload["grants"]
+    assert grants["enabled"] is True
+    assert grants["jurisdictions"] == 1  # the fixture wrote one county dataset
+    assert set(grants["endpoints"]) == {
+        "/v1/grants/summary", "/v1/grants/hin", "/v1/grants/report"
+    }
+    assert "html" in grants["formats"]
+
+
+def test_meta_grants_jurisdictions_zero_when_empty(tmp_path, monkeypatch):
+    # No dropped-in datasets -> count degrades to 0, never raises.
+    monkeypatch.setenv("TRAFFIC_SAFETY_GRANT_DIR", str(tmp_path))
+    payload = TestClient(MODULE.api).get("/v1/meta").json()
+    assert payload["grants"]["jurisdictions"] == 0
+
+
 def test_grants_summary_returns_headline(client):
     response = client.get("/v1/grants/summary?geoid=06037")
     assert response.status_code == 200

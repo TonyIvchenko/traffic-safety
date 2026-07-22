@@ -605,6 +605,21 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "returned at creation."
                 ),
             },
+            "grants": {
+                "enabled": True,
+                "jurisdictions": deps.grant_provider().count(),
+                "endpoints": [
+                    "/v1/grants/summary",
+                    "/v1/grants/hin",
+                    "/v1/grants/report",
+                ],
+                "formats": ["json", "geojson", "html"],
+                "note": (
+                    "SS4A / HSIP safety-analysis datasets per jurisdiction (High "
+                    "Injury Network, systemic risk, crash summary, benefit-cost). "
+                    "Query by GEOID (state / county / tract) or bounding box."
+                ),
+            },
             "docs_url": "/v1/docs",
         }
 
