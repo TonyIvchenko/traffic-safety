@@ -156,6 +156,73 @@ export TRAFFIC_SAFETY_CORS_ORIGINS="*"
 Successful `/v1` responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`;
 throttled requests return `429` with `Retry-After`.
 
+## Federal Safety-Grant Analysis (SS4A / HSIP)
+
+Federal safety programs — USDOT's **Safe Streets and Roads for All (SS4A)** and
+the FHWA **Highway Safety Improvement Program (HSIP)** — require a data-driven
+safety analysis: a High Injury Network (HIN), systemic risk screening, a crash
+summary, and benefit-cost justification. This service generates that analysis for
+any jurisdiction (state, county, or census tract) directly from FARS fatal
+crashes and the TIGER road network.
+
+### Build the datasets (offline)
+
+Requires the [geographic enrichment](#geographic-enrichment--costs) above (TIGER
+county boundaries).
+
+```bash
+conda run -n playground python scripts/build_hin.py            # HIN            -> data/processed/safety/high_injury_network.parquet
+conda run -n playground python scripts/build_grant_dataset.py  # per-county     -> data/reports/grant/<GEOID>.json
+conda run -n playground python scripts/build_grant_index.py    # rollup index   -> data/reports/grant/index.parquet
+```
+
+- `build_hin.py` ranks segments by severity-weighted fatal crashes per km and
+  flags the smallest set carrying the target share (`--target-share`, default
+  50%) of the weighted total.
+- `build_grant_dataset.py` aggregates the HIN, systemic risk, crash summary, and
+  benefit-cost per county (`--counties 06037` to scope, `--crash-reduction` /
+  `--treatment-cost-per-km` to tune the benefit-cost).
+- `build_grant_index.py` flattens every county report into one Parquet table for
+  fast all-jurisdiction serving.
+
+The serving directory is configurable via `TRAFFIC_SAFETY_GRANT_DIR` (default
+`data/reports/grant`), so a refreshed dataset can be dropped in without a restart.
+
+### Serve the analysis (`/v1/grants`)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /v1/grants/summary?geoid=` | Headline crash + HIN + benefit-cost summary for a jurisdiction |
+| `GET /v1/grants/hin?geoid=` (or `?min_lat=&max_lat=&min_lon=&max_lon=`) | HIN corridors — JSON or `?format=geojson` |
+| `GET /v1/grants/report?geoid=&format=json\|html` | Full analysis — JSON, or a self-contained printable HTML deliverable |
+
+```bash
+# County headline summary
+curl "http://127.0.0.1:8080/v1/grants/summary?geoid=06037"
+
+# High Injury Network corridors as GeoJSON (drops into QGIS/Leaflet)
+curl "http://127.0.0.1:8080/v1/grants/hin?geoid=06037&format=geojson"
+
+# Download the full grant report as a standalone HTML document
+curl "http://127.0.0.1:8080/v1/grants/report?geoid=06037&format=html" -o safety-analysis-06037.html
+```
+
+GEOIDs are 2-digit (state), 5-digit (county), or 11-digit (census tract);
+`/v1/meta` reports how many jurisdictions are loaded.
+
+### Methodology & disclaimers
+
+- **Severity basis:** FARS fatal crashes only (KABCO "K"). The US-Accidents
+  `Severity` field is traffic impact, not injury severity, and is deliberately
+  not used for the HIN.
+- **Crash costs:** FHWA comprehensive KABCO costs (2016 USD, `FHWA-SA-17-071`).
+- **Benefit-cost** currently applies a **placeholder** crash-reduction factor and
+  a nominal per-km treatment cost; corridor-specific Crash Modification Factors
+  (from the countermeasures work) are intended to replace the placeholder.
+- This is **decision-support screening, not an official government determination
+  or a substitute for an engineering study.** Validate corridor rankings on the
+  ground before programming funds.
+
 ## Recommended Shape
 
 The most practical nationwide design is a two-layer system:
