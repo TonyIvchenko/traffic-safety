@@ -13,6 +13,7 @@ US_ACCIDENTS_RAW_DIR = TRAFFIC_RAW_DIR / "us_accidents"
 TIGER_RAW_DIR = TRAFFIC_RAW_DIR / "tiger"
 TIGER_PRISEC_DIR = TIGER_RAW_DIR / "prisecroads"
 CENSUS_RAW_DIR = DATA_DIR / "raw" / "census"
+EQUITY_RAW_DIR = DATA_DIR / "raw" / "equity"
 NOAA_RAW_DIR = DATA_DIR / "raw" / "noaa"
 NOAA_ISD_LITE_DIR = NOAA_RAW_DIR / "isd-lite"
 PROCESSED_DIR = DATA_DIR / "processed"
@@ -131,6 +132,7 @@ def ensure_dirs() -> None:
     TIGER_RAW_DIR.mkdir(parents=True, exist_ok=True)
     TIGER_PRISEC_DIR.mkdir(parents=True, exist_ok=True)
     CENSUS_RAW_DIR.mkdir(parents=True, exist_ok=True)
+    EQUITY_RAW_DIR.mkdir(parents=True, exist_ok=True)
     NOAA_RAW_DIR.mkdir(parents=True, exist_ok=True)
     NOAA_ISD_LITE_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
@@ -182,6 +184,31 @@ def tiger_tract_url(state_fips: str, year: int = 2024) -> str:
 
 def tiger_tract_path(state_fips: str, year: int = 2024) -> Path:
     return CENSUS_RAW_DIR / f"tl_{year}_{state_fips}_tract.zip"
+
+
+# Equity datasets. The exact CDC/CEJST hosting occasionally moves, so the
+# download script accepts URL overrides; these are the documented defaults.
+CDC_SVI_YEAR = 2022  # latest CDC/ATSDR Social Vulnerability Index vintage
+CEJST_VERSION = "2.0"  # Justice40 / CEJST communities data version
+
+
+def cdc_svi_url(year: int = CDC_SVI_YEAR) -> str:
+    return f"https://svi.cdc.gov/Documents/Data/{year}/csv/SVI{year}_US.csv"
+
+
+def cdc_svi_path(year: int = CDC_SVI_YEAR) -> Path:
+    return EQUITY_RAW_DIR / f"SVI{year}_US.csv"
+
+
+def cejst_url(version: str = CEJST_VERSION) -> str:
+    return (
+        "https://static-data-screeningtool.geoplatform.gov/data-versions/"
+        f"{version}/data/score/downloadable/{version}-communities.csv"
+    )
+
+
+def cejst_path(version: str = CEJST_VERSION) -> Path:
+    return EQUITY_RAW_DIR / f"cejst_{version}_communities.csv"
 
 
 def noaa_isd_lite_url(station_id: str, year: int) -> str:
