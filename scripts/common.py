@@ -22,6 +22,7 @@ WEATHER_HOURLY_DIR = PROCESSED_WEATHER_DIR / "hourly"
 PROCESSED_SEGMENTS_DIR = PROCESSED_DIR / "segments"
 PROCESSED_GEO_DIR = PROCESSED_DIR / "geo"
 PROCESSED_SAFETY_DIR = PROCESSED_DIR / "safety"
+PROCESSED_EQUITY_DIR = PROCESSED_DIR / "equity"
 MODELS_DIR = SERVICE_DIR / "models"
 TILES_DIR = SERVICE_DIR / "tiles"
 
@@ -35,6 +36,7 @@ VRU_MODEL_BUNDLE_PATH = MODELS_DIR / "traffic_safety_vru.joblib"
 SEGMENT_GEOID_PATH = PROCESSED_GEO_DIR / "segment_geoid.csv.gz"
 CELL_GEOID_PATH = PROCESSED_GEO_DIR / "cell_geoid.csv.gz"
 HIGH_INJURY_NETWORK_PATH = PROCESSED_SAFETY_DIR / "high_injury_network.parquet"
+TRACT_EQUITY_PATH = PROCESSED_EQUITY_DIR / "tract_equity.csv.gz"
 STATION_HISTORY_PATH = NOAA_RAW_DIR / "isd-history.csv"
 REPRESENTATIVE_STATIONS_PATH = PROCESSED_WEATHER_DIR / "representative_stations.csv.gz"
 CELL_WEATHER_STATIONS_PATH = PROCESSED_WEATHER_DIR / "cell_weather_stations.csv.gz"
@@ -141,6 +143,7 @@ def ensure_dirs() -> None:
     PROCESSED_SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_GEO_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_SAFETY_DIR.mkdir(parents=True, exist_ok=True)
+    PROCESSED_EQUITY_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     TILES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -188,8 +191,13 @@ def tiger_tract_path(state_fips: str, year: int = 2024) -> Path:
 
 # Equity datasets. The exact CDC/CEJST hosting occasionally moves, so the
 # download script accepts URL overrides; these are the documented defaults.
-CDC_SVI_YEAR = 2022  # latest CDC/ATSDR Social Vulnerability Index vintage
-CEJST_VERSION = "2.0"  # Justice40 / CEJST communities data version
+#
+# SVI and CEJST are joined on the raw 11-digit tract GEOID, so they MUST share a
+# census-tract vintage. CEJST 2.0 is keyed on 2010 tracts; SVI 2020 is also
+# 2010-tract, so they align. (SVI 2022 uses 2020 tracts and would silently
+# mis-match every re-tracted area — see scripts/build_equity_index.py.)
+CDC_SVI_YEAR = 2020  # 2010-tract vintage, aligned with CEJST 2.0
+CEJST_VERSION = "2.0"  # Justice40 / CEJST communities data (2010 tracts)
 
 
 def cdc_svi_url(year: int = CDC_SVI_YEAR) -> str:
