@@ -126,3 +126,81 @@ def load_equity_index(path=None) -> EquityIndex:
 
 def equity_for_tract(geoid, *, path=None) -> dict:
     return load_equity_index(path).equity_for_tract(geoid)
+
+
+# --- Equity hotspot ranking (over the per-segment equity overlay) --------------
+
+DEFAULT_SVI_WEIGHT = 1.0  # how strongly SVI percentile boosts the priority
+DEFAULT_DISADVANTAGED_BOOST = 0.5  # extra boost for a Justice40 tract
+HIGH_SVI_THRESHOLD = 0.75  # CDC top-quartile "high vulnerability"
+
+
+def equity_priority_score(
+    risk,
+    svi_percentile,
+    disadvantaged,
+    *,
+    svi_weight: float = DEFAULT_SVI_WEIGHT,
+    disadvantaged_boost: float = DEFAULT_DISADVANTAGED_BOOST,
+) -> float:
+    """Risk weighted up by tract vulnerability so dangerous *and* underserved
+    corridors rank highest: ``risk * (1 + svi_weight*svi + boost*disadvantaged)``.
+    Unknown SVI adds no boost (we do not inflate areas we cannot assess)."""
+    base = _percentile(risk) or 0.0
+    svi = _percentile(svi_percentile) or 0.0
+    multiplier = 1.0 + svi_weight * svi + (disadvantaged_boost if bool(disadvantaged) else 0.0)
+    return round(base * multiplier, 6)
+
+
+def rank_equity_hotspots(
+    overlay: "pd.DataFrame",
+    *,
+    top_n: int = 50,
+    min_risk: float = 0.0,
+    only_disadvantaged: bool = False,
+    min_svi: float | None = None,
+    svi_weight: float = DEFAULT_SVI_WEIGHT,
+    disadvantaged_boost: float = DEFAULT_DISADVANTAGED_BOOST,
+    rank_by: str = "priority",
+) -> "pd.DataFrame":
+    """Rank overlay segments as equity hotspots.
+
+    Filters (``min_risk``, ``only_disadvantaged``, ``min_svi``) then ranks by the
+    equity-weighted priority (``rank_by='priority'``) or by raw ``risk``. Adds an
+    ``equity_priority`` column and returns the top ``top_n`` rows.
+    """
+    frame = overlay.copy()
+    if "risk" in frame.columns:
+        risk = pd.to_numeric(frame["risk"], errors="coerce").fillna(0.0)
+    else:
+        risk = pd.Series(0.0, index=frame.index)
+    if "svi_percentile" in frame.columns:
+        svi = pd.to_numeric(frame["svi_percentile"], errors="coerce")
+    else:
+        svi = pd.Series(float("nan"), index=frame.index)
+    if "disadvantaged" in frame.columns:
+        disadvantaged = frame["disadvantaged"].astype(bool)
+    else:
+        disadvantaged = pd.Series(False, index=frame.index)
+
+    frame["equity_priority"] = [
+        equity_priority_score(
+            r, s, d, svi_weight=svi_weight, disadvantaged_boost=disadvantaged_boost
+        )
+        for r, s, d in zip(risk, svi, disadvantaged)
+    ]
+
+    keep = risk >= float(min_risk)
+    if only_disadvantaged:
+        keep = keep & disadvantaged
+    if min_svi is not None:
+        keep = keep & (svi.fillna(-1.0) >= float(min_svi))
+    frame = frame[keep.to_numpy()]
+
+    sort_col = "risk" if str(rank_by).strip().lower() == "risk" else "equity_priority"
+    if sort_col not in frame.columns:
+        sort_col = "equity_priority"
+    frame = frame.sort_values(
+        sort_col, ascending=False, kind="mergesort", na_position="last"
+    ).head(int(top_n))
+    return frame.reset_index(drop=True)
