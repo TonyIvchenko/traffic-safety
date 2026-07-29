@@ -202,6 +202,7 @@ class V1Dependencies:
     risk_cube: object
     watch_store_provider: Callable[[], object]
     grant_provider: Callable[[], object]
+    equity_provider: Callable[..., dict]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -1123,6 +1124,19 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             )
         response.headers["Cache-Control"] = "public, max-age=3600"
         return report
+
+    @router.get(
+        "/equity/point",
+        response_model=None,
+        summary="Tract equity (SVI + Justice40 disadvantaged) at a location",
+    )
+    def equity_point(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        return {"lat": lat, "lon": lon, **deps.equity_provider(lat, lon)}
 
     def _authorized_watch(watch_id: str, token: str) -> dict:
         store = deps.watch_store_provider()

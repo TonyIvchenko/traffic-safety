@@ -77,6 +77,8 @@ from predict import (
 )
 from api_ratelimit import install_rate_limit_middleware, rate_limiter_from_env
 from api_v1 import V1Dependencies, build_v1_router
+from equity import equity_for_tract as _equity_for_tract
+from geo_lookup import tract_of as _tract_of
 from grant_store import get_default_store as _get_grant_store
 from watch_store import get_default_store as _get_watch_store
 
@@ -1099,6 +1101,14 @@ def _load_model_report() -> dict:
     return {"available": False, "metrics": dict(MODEL_BUNDLE.get("metrics", {}) or {})}
 
 
+def _equity_at_point(lat: float, lon: float) -> dict:
+    """Resolve a point to its census tract, then that tract's equity record."""
+    geoid = _tract_of(lat, lon)
+    record = _equity_for_tract(geoid or "")
+    record["tract_geoid"] = geoid
+    return record
+
+
 _v1_overlay_config = OVERLAY["config"]
 api.include_router(
     build_v1_router(
@@ -1125,6 +1135,7 @@ api.include_router(
             risk_cube=OVERLAY["risk"],
             watch_store_provider=_get_watch_store,
             grant_provider=_get_grant_store,
+            equity_provider=_equity_at_point,
         )
     )
 )
