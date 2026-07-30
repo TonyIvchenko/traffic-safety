@@ -23,9 +23,10 @@ REPO_DIR = SRC_DIR.parent
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
 
-from scripts.common import TRACT_EQUITY_PATH
+from scripts.common import EQUITY_OVERLAY_PATH, TRACT_EQUITY_PATH
 
 EQUITY_PATH_ENV = "TRAFFIC_SAFETY_EQUITY_PATH"
+EQUITY_OVERLAY_PATH_ENV = "TRAFFIC_SAFETY_EQUITY_OVERLAY_PATH"
 # CDC SVI quartile bands over the 0-1 percentile (lower-inclusive).
 _SVI_BANDS = ((0.25, "low"), (0.50, "moderate"), (0.75, "high"))
 _TRUE_STRINGS = {"true", "1", "yes", "t"}
@@ -179,7 +180,9 @@ def rank_equity_hotspots(
     else:
         svi = pd.Series(float("nan"), index=frame.index)
     if "disadvantaged" in frame.columns:
-        disadvantaged = frame["disadvantaged"].astype(bool)
+        # _to_bool tolerates pandas nullable (boolean/Int64) NA that a bare
+        # .astype(bool) would 500 on (e.g. an unfilled left-join / convert_dtypes).
+        disadvantaged = frame["disadvantaged"].map(_to_bool).astype(bool)
     else:
         disadvantaged = pd.Series(False, index=frame.index)
 
@@ -204,3 +207,93 @@ def rank_equity_hotspots(
         sort_col, ascending=False, kind="mergesort", na_position="last"
     ).head(int(top_n))
     return frame.reset_index(drop=True)
+
+
+# --- Equity overlay accessor (serves the per-segment overlay to the API) -------
+
+
+def _json_scalar(value):
+    """Coerce a pandas/numpy cell to a JSON-serializable Python value."""
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass  # array-valued cell: pd.isna is ambiguous
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except (ValueError, AttributeError):
+            pass  # size>1 array: fall through to tolist()
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    return value
+
+
+def _overlay_in_bbox(frame: "pd.DataFrame", bbox) -> "pd.DataFrame":
+    if "center_lat" not in frame.columns or "center_lon" not in frame.columns:
+        return frame.iloc[0:0]
+    min_lat, max_lat, min_lon, max_lon = bbox
+    lat = pd.to_numeric(frame["center_lat"], errors="coerce")
+    lon = pd.to_numeric(frame["center_lon"], errors="coerce")
+    mask = (lat >= min_lat) & (lat <= max_lat) & (lon >= min_lon) & (lon <= max_lon)
+    return frame[mask.fillna(False).to_numpy()]
+
+
+class EquityOverlay:
+    """Read-only accessor over the per-segment equity overlay parquet."""
+
+    def __init__(self, frame) -> None:
+        self._frame = frame
+
+    def __len__(self) -> int:
+        return len(self._frame)
+
+    @classmethod
+    def from_parquet(cls, path) -> "EquityOverlay":
+        path = Path(path)
+        if not path.exists():
+            return cls(pd.DataFrame())
+        try:
+            frame = pd.read_parquet(path)
+        except (OSError, ValueError):
+            return cls(pd.DataFrame())
+        return cls(frame)
+
+    def hotspots(
+        self,
+        *,
+        bbox=None,
+        top_n: int = 50,
+        min_risk: float = 0.0,
+        only_disadvantaged: bool = False,
+        min_svi: float | None = None,
+        rank_by: str = "priority",
+    ) -> list[dict]:
+        """Ranked equity hotspots as JSON-safe records (optionally bbox-filtered)."""
+        frame = self._frame
+        if len(frame) == 0:
+            return []
+        if bbox is not None:
+            frame = _overlay_in_bbox(frame, bbox)
+        ranked = rank_equity_hotspots(
+            frame,
+            top_n=top_n,
+            min_risk=min_risk,
+            only_disadvantaged=only_disadvantaged,
+            min_svi=min_svi,
+            rank_by=rank_by,
+        )
+        return [
+            {key: _json_scalar(value) for key, value in row.items()}
+            for row in ranked.to_dict("records")
+        ]
+
+
+@lru_cache(maxsize=4)
+def _load_overlay_cached(path_str: str) -> EquityOverlay:
+    return EquityOverlay.from_parquet(path_str)
+
+
+def load_equity_overlay(path=None) -> EquityOverlay:
+    resolved = str(path or os.environ.get(EQUITY_OVERLAY_PATH_ENV) or EQUITY_OVERLAY_PATH)
+    return _load_overlay_cached(resolved)

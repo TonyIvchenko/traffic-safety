@@ -203,6 +203,7 @@ class V1Dependencies:
     watch_store_provider: Callable[[], object]
     grant_provider: Callable[[], object]
     equity_provider: Callable[..., dict]
+    equity_overlay_provider: Callable[[], object]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -529,6 +530,29 @@ def _grants_hin_geojson(corridors: list[dict]) -> dict:
                 "properties": {
                     key: value
                     for key, value in corridor.items()
+                    if key not in ("center_lat", "center_lon")
+                },
+            }
+        )
+    return {"type": "FeatureCollection", "count": len(features), "features": features}
+
+
+def _equity_hotspots_geojson(records: list[dict]) -> dict:
+    """Point features at equity-hotspot segment centroids. A record with a
+    missing/non-numeric centroid is skipped so a bad overlay degrades, not 500s."""
+    features = []
+    for record in records:
+        lat = _safe_float(record.get("center_lat"))
+        lon = _safe_float(record.get("center_lon"))
+        if lat is None or lon is None:
+            continue
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    key: value
+                    for key, value in record.items()
                     if key not in ("center_lat", "center_lon")
                 },
             }
@@ -1137,6 +1161,53 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
     ) -> dict:
         response.headers["Cache-Control"] = "public, max-age=3600"
         return {"lat": lat, "lon": lon, **deps.equity_provider(lat, lon)}
+
+    @router.get(
+        "/equity/hotspots",
+        response_model=None,
+        summary="High-risk segments in disadvantaged / high-SVI tracts (JSON or GeoJSON)",
+    )
+    def equity_hotspots(
+        response: Response,
+        min_lat: float | None = Query(None, ge=-90.0, le=90.0),
+        max_lat: float | None = Query(None, ge=-90.0, le=90.0),
+        min_lon: float | None = Query(None, ge=-180.0, le=180.0),
+        max_lon: float | None = Query(None, ge=-180.0, le=180.0),
+        top_n: int = Query(50, ge=1, le=500),
+        min_risk: float = Query(0.0, ge=0.0, le=1.0),
+        only_disadvantaged: bool = Query(False, description="restrict to Justice40 tracts"),
+        min_svi: float | None = Query(None, ge=0.0, le=1.0, description="minimum SVI percentile"),
+        rank_by: str = Query("priority", description="'priority' (equity-weighted) or 'risk'"),
+        output_format: str = Query("json", alias="format", description="'json' or 'geojson'"),
+    ):
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        bbox_values = (min_lat, max_lat, min_lon, max_lon)
+        bbox = None
+        if any(value is not None for value in bbox_values):
+            if any(value is None for value in bbox_values):
+                raise HTTPException(
+                    status_code=422,
+                    detail="bbox requires all of min_lat, max_lat, min_lon, max_lon",
+                )
+            if min_lat > max_lat or min_lon > max_lon:
+                raise HTTPException(status_code=422, detail="bbox min must be <= max")
+            bbox = bbox_values
+
+        records = deps.equity_overlay_provider().hotspots(
+            bbox=bbox,
+            top_n=top_n,
+            min_risk=min_risk,
+            only_disadvantaged=only_disadvantaged,
+            min_svi=min_svi,
+            rank_by=rank_by,
+        )
+        if output_format.strip().lower() == "geojson":
+            return JSONResponse(
+                content=_equity_hotspots_geojson(records),
+                media_type="application/geo+json",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+        return {"count": len(records), "hotspots": records}
 
     def _authorized_watch(watch_id: str, token: str) -> dict:
         store = deps.watch_store_provider()

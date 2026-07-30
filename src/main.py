@@ -78,6 +78,7 @@ from predict import (
 from api_ratelimit import install_rate_limit_middleware, rate_limiter_from_env
 from api_v1 import V1Dependencies, build_v1_router
 from equity import equity_for_tract as _equity_for_tract
+from equity import load_equity_overlay as _get_equity_overlay
 from geo_lookup import tract_of as _tract_of
 from grant_store import get_default_store as _get_grant_store
 from watch_store import get_default_store as _get_watch_store
@@ -1136,6 +1137,7 @@ api.include_router(
             watch_store_provider=_get_watch_store,
             grant_provider=_get_grant_store,
             equity_provider=_equity_at_point,
+            equity_overlay_provider=_get_equity_overlay,
         )
     )
 )

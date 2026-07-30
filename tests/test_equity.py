@@ -180,3 +180,95 @@ def test_rank_equity_hotspots_handles_nan_without_crash():
     )
     ranked = equity.rank_equity_hotspots(overlay, min_risk=0.0)
     assert ranked.iloc[0]["equity_priority"] == 0.0
+
+
+# --- EquityOverlay accessor ---------------------------------------------------
+
+
+def _overlay_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "segment_id": ["a", "b", "c", "d"],
+            "tract_geoid": ["06037920100", "06037920200", "06099000100", "06037920300"],
+            "risk": [0.8, 0.8, 0.9, 0.2],
+            "svi_percentile": [0.9, 0.1, None, 0.95],
+            "disadvantaged": [True, False, False, True],
+            "center_lat": [34.0, 34.1, 36.0, 34.2],
+            "center_lon": [-118.2, -118.3, -119.0, -118.4],
+            "fullname": ["Main St", "1st Ave", "Rural Rd", "Elm St"],
+        }
+    )
+
+
+def _write_overlay(tmp_path) -> Path:
+    path = tmp_path / "segment_equity.parquet"
+    _overlay_frame().to_parquet(path, index=False)
+    return path
+
+
+def test_equity_overlay_hotspots_ranked_json_safe(tmp_path):
+    overlay = equity.EquityOverlay.from_parquet(_write_overlay(tmp_path))
+    records = overlay.hotspots()
+    assert records[0]["segment_id"] == "a"  # boosted (disadvantaged, high SVI)
+    # JSON-safe: the unknown-SVI row 'c' carries None, not NaN.
+    c = next(r for r in records if r["segment_id"] == "c")
+    assert c["svi_percentile"] is None
+    import json
+
+    json.dumps(records)  # must not raise
+
+
+def test_equity_overlay_bbox_filter(tmp_path):
+    overlay = equity.EquityOverlay.from_parquet(_write_overlay(tmp_path))
+    records = overlay.hotspots(bbox=(34.0, 34.25, -118.5, -118.1))
+    assert set(r["segment_id"] for r in records) == {"a", "b", "d"}  # excludes rural 'c'
+
+
+def test_equity_overlay_only_disadvantaged(tmp_path):
+    overlay = equity.EquityOverlay.from_parquet(_write_overlay(tmp_path))
+    records = overlay.hotspots(only_disadvantaged=True)
+    assert set(r["segment_id"] for r in records) == {"a", "d"}
+
+
+def test_equity_overlay_missing_file_is_empty(tmp_path):
+    overlay = equity.EquityOverlay.from_parquet(tmp_path / "nope.parquet")
+    assert len(overlay) == 0
+    assert overlay.hotspots() == []
+
+
+def test_load_equity_overlay_honors_env(tmp_path, monkeypatch):
+    path = _write_overlay(tmp_path)
+    monkeypatch.setenv(equity.EQUITY_OVERLAY_PATH_ENV, str(path))
+    assert len(equity.load_equity_overlay()) == 4
+
+
+def test_equity_overlay_hotspots_nullable_disadvantaged(tmp_path):
+    # A nullable boolean column with pd.NA (unfilled left-join) must not 500.
+    frame = pd.DataFrame(
+        {
+            "segment_id": ["a", "b"],
+            "risk": [0.8, 0.7],
+            "svi_percentile": [0.9, 0.8],
+            "disadvantaged": pd.array([True, pd.NA], dtype="boolean"),
+            "center_lat": [34.0, 34.1],
+            "center_lon": [-118.2, -118.3],
+        }
+    )
+    path = tmp_path / "o.parquet"
+    frame.to_parquet(path, index=False)
+    overlay = equity.EquityOverlay.from_parquet(path)
+    records = overlay.hotspots()  # must not raise
+    assert len(records) == 2
+    # NA disadvantaged is treated as not-disadvantaged by the filter.
+    only = overlay.hotspots(only_disadvantaged=True)
+    assert {r["segment_id"] for r in only} == {"a"}
+
+
+def test_json_scalar_coerces_arrays_and_scalars():
+    import numpy as np
+
+    assert equity._json_scalar(np.int64(3)) == 3
+    assert equity._json_scalar(np.array([5])) == 5  # size 1 -> item()
+    assert equity._json_scalar(np.array([1.0, 2.0])) == [1.0, 2.0]  # size>1 -> tolist()
+    assert equity._json_scalar(None) is None
+    assert equity._json_scalar("x") == "x"
