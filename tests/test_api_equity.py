@@ -151,3 +151,42 @@ def test_equity_hotspots_geojson_tolerates_bad_centroid(tmp_path, monkeypatch):
     response = TestClient(MODULE.api).get("/v1/equity/hotspots?format=geojson")
     assert response.status_code == 200
     assert response.json()["count"] == 1  # 'b' skipped, 'a' kept
+
+
+@pytest.fixture()
+def summary_client(tmp_path, monkeypatch):
+    overlay = pd.DataFrame(
+        {
+            "segment_id": ["a", "b", "c", "d"],
+            "tract_geoid": ["06037920100", "06037920200", "06037920300", "06059000100"],
+            "disadvantaged": [True, True, False, False],
+            "crashes": [10.0, 6.0, 2.0, 0.0],
+            "risk": [0.8, 0.6, 0.4, 0.2],
+            "svi_percentile": [0.9, 0.8, 0.3, 0.1],
+        }
+    )
+    path = tmp_path / "segment_equity.parquet"
+    overlay.to_parquet(path, index=False)
+    monkeypatch.setenv("TRAFFIC_SAFETY_EQUITY_OVERLAY_PATH", str(path))
+    return TestClient(MODULE.api)
+
+
+def test_equity_summary_national(summary_client):
+    payload = summary_client.get("/v1/equity/summary").json()
+    assert payload["geoid"] is None
+    assert payload["segments"] == 4
+    assert payload["crash_disparity_ratio"] == pytest.approx(8.0)
+    assert summary_client.get("/v1/equity/summary").headers["cache-control"] == "public, max-age=3600"
+
+
+def test_equity_summary_by_geoid(summary_client):
+    payload = summary_client.get("/v1/equity/summary?geoid=06037").json()
+    assert payload["geoid"] == "06037"
+    assert payload["segments"] == 3
+    assert payload["crash_disparity_ratio"] == pytest.approx(4.0)
+
+
+def test_equity_summary_unknown_geoid(summary_client):
+    payload = summary_client.get("/v1/equity/summary?geoid=99").json()
+    assert payload["segments"] == 0
+    assert payload["crash_disparity_ratio"] is None

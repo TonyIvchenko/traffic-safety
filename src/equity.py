@@ -239,6 +239,88 @@ def _overlay_in_bbox(frame: "pd.DataFrame", bbox) -> "pd.DataFrame":
     return frame[mask.fillna(False).to_numpy()]
 
 
+_EMPTY_DISPARITY = {
+    "segments": 0,
+    "disadvantaged_segments": 0,
+    "high_svi_segments": 0,
+    "segment_share_disadvantaged": None,
+    "crashes_total": 0.0,
+    "crashes_in_disadvantaged": 0.0,
+    "crash_share_disadvantaged": None,
+    "crash_burden_disadvantaged": None,
+    "crash_burden_other": None,
+    "crash_disparity_ratio": None,
+    "mean_risk_disadvantaged": None,
+    "mean_risk_other": None,
+    "risk_disparity_ratio": None,
+}
+
+
+def _ratio(numerator: float, denominator: float):
+    return round(numerator / denominator, 3) if denominator else None
+
+
+def equity_disparity(frame: "pd.DataFrame") -> dict:
+    """Crash/risk equity disparity over a (pre-scoped) segment overlay frame.
+
+    The headline ``crash_disparity_ratio`` is the crash burden *per segment* in
+    disadvantaged tracts divided by that in the rest — >1 means disadvantaged
+    corridors bear a disproportionate share.
+    """
+    n = int(len(frame))
+    if n == 0:
+        return dict(_EMPTY_DISPARITY)
+
+    disadvantaged = (
+        frame["disadvantaged"].map(_to_bool).astype(bool)
+        if "disadvantaged" in frame.columns
+        else pd.Series(False, index=frame.index)
+    )
+    crashes = (
+        pd.to_numeric(frame["crashes"], errors="coerce").fillna(0.0)
+        if "crashes" in frame.columns
+        else pd.Series(0.0, index=frame.index)
+    )
+    risk = (
+        pd.to_numeric(frame["risk"], errors="coerce").fillna(0.0)
+        if "risk" in frame.columns
+        else pd.Series(0.0, index=frame.index)
+    )
+    svi = (
+        pd.to_numeric(frame["svi_percentile"], errors="coerce")
+        if "svi_percentile" in frame.columns
+        else pd.Series(float("nan"), index=frame.index)
+    )
+
+    n_disadvantaged = int(disadvantaged.sum())
+    n_other = n - n_disadvantaged
+    crashes_disadvantaged = float(crashes[disadvantaged].sum())
+    crashes_other = float(crashes[~disadvantaged].sum())
+    crashes_total = crashes_disadvantaged + crashes_other
+    burden_disadvantaged = crashes_disadvantaged / n_disadvantaged if n_disadvantaged else 0.0
+    burden_other = crashes_other / n_other if n_other else 0.0
+    risk_disadvantaged = float(risk[disadvantaged].mean()) if n_disadvantaged else 0.0
+    risk_other = float(risk[~disadvantaged].mean()) if n_other else 0.0
+
+    return {
+        "segments": n,
+        "disadvantaged_segments": n_disadvantaged,
+        "high_svi_segments": int((svi >= HIGH_SVI_THRESHOLD).sum()),
+        "segment_share_disadvantaged": round(n_disadvantaged / n, 4),
+        "crashes_total": round(crashes_total, 3),
+        "crashes_in_disadvantaged": round(crashes_disadvantaged, 3),
+        "crash_share_disadvantaged": round(crashes_disadvantaged / crashes_total, 4)
+        if crashes_total
+        else None,
+        "crash_burden_disadvantaged": round(burden_disadvantaged, 4),
+        "crash_burden_other": round(burden_other, 4),
+        "crash_disparity_ratio": _ratio(burden_disadvantaged, burden_other),
+        "mean_risk_disadvantaged": round(risk_disadvantaged, 4),
+        "mean_risk_other": round(risk_other, 4),
+        "risk_disparity_ratio": _ratio(risk_disadvantaged, risk_other),
+    }
+
+
 class EquityOverlay:
     """Read-only accessor over the per-segment equity overlay parquet."""
 
@@ -287,6 +369,22 @@ class EquityOverlay:
             {key: _json_scalar(value) for key, value in row.items()}
             for row in ranked.to_dict("records")
         ]
+
+    def summary(self, *, geoid=None) -> dict:
+        """Equity disparity for a jurisdiction (tract-GEOID prefix), or the whole
+        dataset when ``geoid`` is None. The state/county prefix is stable across
+        the 2010/2020 tract vintages, so it scopes correctly regardless."""
+        frame = self._frame
+        scope = str(geoid).strip() if geoid else None
+        if scope:
+            if "tract_geoid" in frame.columns and len(frame):
+                mask = frame["tract_geoid"].astype("string").str.startswith(scope)
+                frame = frame[mask.fillna(False).to_numpy()]
+            else:
+                frame = frame.iloc[0:0]
+        result = equity_disparity(frame)
+        result["geoid"] = scope
+        return result
 
 
 @lru_cache(maxsize=4)

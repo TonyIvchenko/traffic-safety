@@ -272,3 +272,69 @@ def test_json_scalar_coerces_arrays_and_scalars():
     assert equity._json_scalar(np.array([1.0, 2.0])) == [1.0, 2.0]  # size>1 -> tolist()
     assert equity._json_scalar(None) is None
     assert equity._json_scalar("x") == "x"
+
+
+# --- Equity disparity summary -------------------------------------------------
+
+
+def _disparity_overlay() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "segment_id": ["a", "b", "c", "d"],
+            "tract_geoid": ["06037920100", "06037920200", "06037920300", "06059000100"],
+            "disadvantaged": [True, True, False, False],
+            "crashes": [10.0, 6.0, 2.0, 0.0],
+            "risk": [0.8, 0.6, 0.4, 0.2],
+            "svi_percentile": [0.9, 0.8, 0.3, 0.1],
+        }
+    )
+
+
+def test_equity_disparity_metrics():
+    result = equity.equity_disparity(_disparity_overlay())
+    assert result["segments"] == 4
+    assert result["disadvantaged_segments"] == 2
+    assert result["crashes_total"] == 18.0
+    assert result["crashes_in_disadvantaged"] == 16.0
+    assert result["crash_share_disadvantaged"] == pytest.approx(16 / 18, abs=1e-4)
+    # burden per segment: disadvantaged 16/2=8, other 2/2=1 -> ratio 8.
+    assert result["crash_disparity_ratio"] == pytest.approx(8.0)
+    # mean risk: disadvantaged 0.7, other 0.3 -> ratio ~2.333.
+    assert result["risk_disparity_ratio"] == pytest.approx(0.7 / 0.3, abs=1e-3)
+    assert result["high_svi_segments"] == 2  # svi 0.9, 0.8 >= 0.75
+
+
+def test_equity_disparity_empty():
+    result = equity.equity_disparity(_disparity_overlay().iloc[0:0])
+    assert result["segments"] == 0
+    assert result["crash_disparity_ratio"] is None
+
+
+def test_equity_disparity_all_disadvantaged_ratio_none():
+    frame = _disparity_overlay()
+    frame["disadvantaged"] = True  # no comparison group
+    result = equity.equity_disparity(frame)
+    assert result["crash_disparity_ratio"] is None  # burden_other == 0
+
+
+def test_overlay_summary_scopes_by_geoid_prefix(tmp_path):
+    path = tmp_path / "o.parquet"
+    _disparity_overlay().to_parquet(path, index=False)
+    overlay = equity.EquityOverlay.from_parquet(path)
+
+    la = overlay.summary(geoid="06037")  # a, b, c
+    assert la["geoid"] == "06037"
+    assert la["segments"] == 3
+    assert la["crash_disparity_ratio"] == pytest.approx(4.0)  # (16/2)/(2/1)
+
+    national = overlay.summary()  # all 4
+    assert national["geoid"] is None
+    assert national["segments"] == 4
+
+
+def test_overlay_summary_unknown_geoid_is_empty(tmp_path):
+    path = tmp_path / "o.parquet"
+    _disparity_overlay().to_parquet(path, index=False)
+    result = equity.EquityOverlay.from_parquet(path).summary(geoid="99")
+    assert result["segments"] == 0
+    assert result["crash_disparity_ratio"] is None

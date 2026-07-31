@@ -1209,6 +1209,20 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             )
         return {"count": len(records), "hotspots": records}
 
+    @router.get(
+        "/equity/summary",
+        response_model=None,
+        summary="Crash/risk equity disparity for a jurisdiction (or the whole dataset)",
+    )
+    def equity_summary(
+        response: Response,
+        geoid: str | None = Query(
+            None, description="state/county/tract GEOID prefix; omit for the whole dataset"
+        ),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        return deps.equity_overlay_provider().summary(geoid=geoid.strip() if geoid else None)
+
     def _authorized_watch(watch_id: str, token: str) -> dict:
         store = deps.watch_store_provider()
         record = store.get_watch(watch_id)
