@@ -560,6 +560,36 @@ def _equity_hotspots_geojson(records: list[dict]) -> dict:
     return {"type": "FeatureCollection", "count": len(features), "features": features}
 
 
+_SVI_FILL = {
+    "low": "#2c7bb6",
+    "moderate": "#abd9e9",
+    "high": "#fdae61",
+    "very_high": "#d7191c",
+    "unknown": "#cccccc",
+}
+
+
+def _equity_choropleth_geojson(records: list[dict], geometry_of=None) -> dict:
+    """Tract equity choropleth. Uses each tract's polygon when ``geometry_of``
+    (geoid -> GeoJSON geometry) is supplied, else a centroid Point. Adds a
+    simplestyle ``fill`` colour keyed to the SVI band."""
+    features = []
+    for record in records:
+        geometry = geometry_of(record["tract_geoid"]) if geometry_of else None
+        if geometry is None:
+            lat = _safe_float(record.get("center_lat"))
+            lon = _safe_float(record.get("center_lon"))
+            if lat is None or lon is None:
+                continue
+            geometry = {"type": "Point", "coordinates": [lon, lat]}
+        properties = {
+            key: value for key, value in record.items() if key not in ("center_lat", "center_lon")
+        }
+        properties["fill"] = _SVI_FILL.get(record.get("svi_category"), _SVI_FILL["unknown"])
+        features.append({"type": "Feature", "geometry": geometry, "properties": properties})
+    return {"type": "FeatureCollection", "count": len(features), "features": features}
+
+
 def build_v1_router(deps: V1Dependencies) -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["v1"])
 
@@ -1222,6 +1252,41 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
     ) -> dict:
         response.headers["Cache-Control"] = "public, max-age=3600"
         return deps.equity_overlay_provider().summary(geoid=geoid.strip() if geoid else None)
+
+    @router.get(
+        "/equity/choropleth",
+        response_model=None,
+        summary="Tract-level equity map (GeoJSON) by SVI / Justice40 / risk",
+    )
+    def equity_choropleth(
+        response: Response,
+        min_lat: float | None = Query(None, ge=-90.0, le=90.0),
+        max_lat: float | None = Query(None, ge=-90.0, le=90.0),
+        min_lon: float | None = Query(None, ge=-180.0, le=180.0),
+        max_lon: float | None = Query(None, ge=-180.0, le=180.0),
+        output_format: str = Query("geojson", alias="format", description="'geojson' or 'json'"),
+    ):
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        bbox_values = (min_lat, max_lat, min_lon, max_lon)
+        bbox = None
+        if any(value is not None for value in bbox_values):
+            if any(value is None for value in bbox_values):
+                raise HTTPException(
+                    status_code=422,
+                    detail="bbox requires all of min_lat, max_lat, min_lon, max_lon",
+                )
+            if min_lat > max_lat or min_lon > max_lon:
+                raise HTTPException(status_code=422, detail="bbox min must be <= max")
+            bbox = bbox_values
+
+        records = deps.equity_overlay_provider().tract_records(bbox=bbox)
+        if output_format.strip().lower() == "json":
+            return {"count": len(records), "tracts": records}
+        return JSONResponse(
+            content=_equity_choropleth_geojson(records),
+            media_type="application/geo+json",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
 
     def _authorized_watch(watch_id: str, token: str) -> dict:
         store = deps.watch_store_provider()

@@ -338,3 +338,55 @@ def test_overlay_summary_unknown_geoid_is_empty(tmp_path):
     result = equity.EquityOverlay.from_parquet(path).summary(geoid="99")
     assert result["segments"] == 0
     assert result["crash_disparity_ratio"] is None
+
+
+# --- Tract choropleth aggregation ---------------------------------------------
+
+
+def _choropleth_overlay() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "segment_id": ["a", "b", "c"],
+            "tract_geoid": ["06037920100", "06037920100", "06037920200"],
+            "svi_percentile": [0.9, 0.9, 0.2],
+            "disadvantaged": [True, True, False],
+            "risk": [0.8, 0.6, 0.4],
+            "crashes": [5.0, 3.0, 1.0],
+            "center_lat": [34.0, 34.02, 34.2],
+            "center_lon": [-118.2, -118.22, -118.4],
+        }
+    )
+
+
+def test_tract_records_aggregates_by_tract(tmp_path):
+    path = tmp_path / "o.parquet"
+    _choropleth_overlay().to_parquet(path, index=False)
+    records = equity.EquityOverlay.from_parquet(path).tract_records()
+    by_tract = {r["tract_geoid"]: r for r in records}
+    assert set(by_tract) == {"06037920100", "06037920200"}
+
+    a = by_tract["06037920100"]  # two segments a, b
+    assert a["segment_count"] == 2
+    assert a["crashes"] == 8.0  # 5 + 3
+    assert a["mean_risk"] == pytest.approx(0.7)  # (0.8 + 0.6)/2
+    assert a["svi_percentile"] == 0.9
+    assert a["svi_category"] == "very_high"
+    assert a["disadvantaged"] is True
+    assert a["center_lat"] == pytest.approx(34.01)  # centroid mean
+
+    b = by_tract["06037920200"]
+    assert b["segment_count"] == 1
+    assert b["disadvantaged"] is False
+
+
+def test_tract_records_bbox_filter(tmp_path):
+    path = tmp_path / "o.parquet"
+    _choropleth_overlay().to_parquet(path, index=False)
+    records = equity.EquityOverlay.from_parquet(path).tract_records(
+        bbox=(33.9, 34.1, -118.3, -118.1)
+    )
+    assert {r["tract_geoid"] for r in records} == {"06037920100"}  # excludes far tract
+
+
+def test_tract_records_empty(tmp_path):
+    assert equity.EquityOverlay.from_parquet(tmp_path / "nope.parquet").tract_records() == []

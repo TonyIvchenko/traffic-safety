@@ -370,6 +370,64 @@ class EquityOverlay:
             for row in ranked.to_dict("records")
         ]
 
+    def tract_records(self, *, bbox=None) -> list[dict]:
+        """Per-tract equity aggregation for a choropleth: segment count, summed
+        crashes, mean risk, the tract's SVI/disadvantaged status, and a centroid.
+        Returns JSON-safe records (optionally bbox-filtered by segment centroid)."""
+        frame = self._frame
+        if len(frame) == 0 or "tract_geoid" not in frame.columns:
+            return []
+        if bbox is not None:
+            frame = _overlay_in_bbox(frame, bbox)
+        work = frame.copy()
+        work["tract_geoid"] = work["tract_geoid"].astype("string")
+        work = work[work["tract_geoid"].notna() & (work["tract_geoid"] != "")]
+        if len(work) == 0:
+            return []
+
+        for column in ("svi_percentile", "risk", "crashes", "center_lat", "center_lon"):
+            if column in work.columns:
+                work[column] = pd.to_numeric(work[column], errors="coerce")
+            else:
+                work[column] = float("nan")
+        work["_disadvantaged"] = (
+            work["disadvantaged"].map(_to_bool).astype(bool)
+            if "disadvantaged" in work.columns
+            else False
+        )
+
+        grouped = (
+            work.groupby("tract_geoid", sort=True)
+            .agg(
+                svi_percentile=("svi_percentile", "mean"),
+                disadvantaged=("_disadvantaged", "max"),
+                segment_count=("tract_geoid", "size"),
+                crashes=("crashes", "sum"),
+                mean_risk=("risk", "mean"),
+                center_lat=("center_lat", "mean"),
+                center_lon=("center_lon", "mean"),
+            )
+            .reset_index()
+        )
+
+        records = []
+        for row in grouped.to_dict("records"):
+            svi = None if pd.isna(row["svi_percentile"]) else float(row["svi_percentile"])
+            records.append(
+                {
+                    "tract_geoid": str(row["tract_geoid"]),
+                    "svi_percentile": _round(svi),
+                    "svi_category": svi_category(svi),
+                    "disadvantaged": bool(row["disadvantaged"]),
+                    "segment_count": int(row["segment_count"]),
+                    "crashes": 0.0 if pd.isna(row["crashes"]) else round(float(row["crashes"]), 3),
+                    "mean_risk": None if pd.isna(row["mean_risk"]) else round(float(row["mean_risk"]), 4),
+                    "center_lat": _round(None if pd.isna(row["center_lat"]) else float(row["center_lat"])),
+                    "center_lon": _round(None if pd.isna(row["center_lon"]) else float(row["center_lon"])),
+                }
+            )
+        return records
+
     def summary(self, *, geoid=None) -> dict:
         """Equity disparity for a jurisdiction (tract-GEOID prefix), or the whole
         dataset when ``geoid`` is None. The state/county prefix is stable across

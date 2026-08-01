@@ -190,3 +190,71 @@ def test_equity_summary_unknown_geoid(summary_client):
     payload = summary_client.get("/v1/equity/summary?geoid=99").json()
     assert payload["segments"] == 0
     assert payload["crash_disparity_ratio"] is None
+
+
+@pytest.fixture()
+def choropleth_client(tmp_path, monkeypatch):
+    overlay = pd.DataFrame(
+        {
+            "segment_id": ["a", "b", "c"],
+            "tract_geoid": ["06037920100", "06037920100", "06037920200"],
+            "svi_percentile": [0.9, 0.9, 0.2],
+            "disadvantaged": [True, True, False],
+            "risk": [0.8, 0.6, 0.4],
+            "crashes": [5.0, 3.0, 1.0],
+            "center_lat": [34.0, 34.02, 34.2],
+            "center_lon": [-118.2, -118.22, -118.4],
+        }
+    )
+    path = tmp_path / "segment_equity.parquet"
+    overlay.to_parquet(path, index=False)
+    monkeypatch.setenv("TRAFFIC_SAFETY_EQUITY_OVERLAY_PATH", str(path))
+    return TestClient(MODULE.api)
+
+
+def test_equity_choropleth_geojson(choropleth_client):
+    response = choropleth_client.get("/v1/equity/choropleth")
+    assert response.headers["content-type"].startswith("application/geo+json")
+    payload = response.json()
+    assert payload["type"] == "FeatureCollection"
+    assert payload["count"] == 2  # two tracts
+    feature = next(
+        f for f in payload["features"] if f["properties"]["tract_geoid"] == "06037920100"
+    )
+    assert feature["geometry"]["type"] == "Point"
+    assert feature["properties"]["segment_count"] == 2
+    assert feature["properties"]["fill"] == "#d7191c"  # very_high SVI band
+    assert "center_lat" not in feature["properties"]
+
+
+def test_equity_choropleth_json_format(choropleth_client):
+    payload = choropleth_client.get("/v1/equity/choropleth?format=json").json()
+    assert payload["count"] == 2
+    assert {t["tract_geoid"] for t in payload["tracts"]} == {"06037920100", "06037920200"}
+
+
+def test_equity_choropleth_bbox(choropleth_client):
+    payload = choropleth_client.get(
+        "/v1/equity/choropleth?min_lat=33.9&max_lat=34.1&min_lon=-118.3&max_lon=-118.1&format=json"
+    ).json()
+    assert {t["tract_geoid"] for t in payload["tracts"]} == {"06037920100"}
+
+
+def test_equity_choropleth_partial_bbox_is_422(choropleth_client):
+    assert choropleth_client.get("/v1/equity/choropleth?min_lat=34.0").status_code == 422
+
+
+def test_choropleth_builder_uses_injected_polygon():
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    src = str(_Path(__file__).resolve().parents[1] / "src")
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+    import api_v1
+
+    polygon = {"type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [0, 0]]]}
+    records = [{"tract_geoid": "06037920100", "svi_category": "high", "center_lat": 34.0, "center_lon": -118.2}]
+    geojson = api_v1._equity_choropleth_geojson(records, geometry_of=lambda g: polygon)
+    assert geojson["features"][0]["geometry"] == polygon  # true choropleth polygon
+    assert geojson["features"][0]["properties"]["fill"] == "#fdae61"
