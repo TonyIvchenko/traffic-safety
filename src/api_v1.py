@@ -204,6 +204,7 @@ class V1Dependencies:
     grant_provider: Callable[[], object]
     equity_provider: Callable[..., dict]
     equity_overlay_provider: Callable[[], object]
+    equity_vintage: dict
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -673,6 +674,23 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "SS4A / HSIP safety-analysis datasets per jurisdiction (High "
                     "Injury Network, systemic risk, crash summary, benefit-cost). "
                     "Query by GEOID (state / county / tract) or bounding box."
+                ),
+            },
+            "equity": {
+                "enabled": True,
+                "segments": len(deps.equity_overlay_provider()),
+                "endpoints": [
+                    "/v1/equity/point",
+                    "/v1/equity/hotspots",
+                    "/v1/equity/summary",
+                    "/v1/equity/choropleth",
+                ],
+                "formats": ["json", "geojson"],
+                "data_vintage": deps.equity_vintage,
+                "note": (
+                    "Tract-level social vulnerability (CDC/ATSDR SVI) and Justice40 "
+                    "disadvantaged status (CEJST) joined to road segments; SVI and "
+                    "CEJST share 2010 census-tract boundaries."
                 ),
             },
             "docs_url": "/v1/docs",

@@ -31,6 +31,27 @@ def equity_client(tmp_path, monkeypatch):
     return TestClient(MODULE.api)
 
 
+def test_meta_advertises_equity(hotspots_client):
+    payload = hotspots_client.get("/v1/meta").json()
+    equity_meta = payload["equity"]
+    assert equity_meta["enabled"] is True
+    assert equity_meta["segments"] == 3  # the fixture overlay has 3 segments
+    assert set(equity_meta["endpoints"]) >= {
+        "/v1/equity/point",
+        "/v1/equity/hotspots",
+        "/v1/equity/summary",
+        "/v1/equity/choropleth",
+    }
+    assert "svi" in equity_meta["data_vintage"]
+    assert equity_meta["data_vintage"]["tract_boundaries"] == "2010 census tracts"
+
+
+def test_meta_equity_segments_zero_when_no_overlay(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRAFFIC_SAFETY_EQUITY_OVERLAY_PATH", str(tmp_path / "missing.parquet"))
+    payload = TestClient(MODULE.api).get("/v1/meta").json()
+    assert payload["equity"]["segments"] == 0
+
+
 def test_equity_point_known_tract(equity_client, monkeypatch):
     # geo_lookup is stubbed (no TIGER shapefiles in CI); the point maps to a
     # tract present in the fixture equity index.

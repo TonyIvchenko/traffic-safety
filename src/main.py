@@ -67,7 +67,7 @@ from road_tiles import (
     weather_raster_assets_ready,
 )
 from segment_runtime import load_segment_runtime, score_segments_in_bbox
-from scripts.common import ROAD_SEGMENTS_PATH
+from scripts.common import CDC_SVI_YEAR, CEJST_VERSION, ROAD_SEGMENTS_PATH
 from predict import (
     MODEL_BUNDLE,
     MODEL_VERSION,
@@ -1138,6 +1138,11 @@ api.include_router(
             grant_provider=_get_grant_store,
             equity_provider=_equity_at_point,
             equity_overlay_provider=_get_equity_overlay,
+            equity_vintage={
+                "svi": f"CDC/ATSDR SVI {CDC_SVI_YEAR}",
+                "cejst": f"CEJST {CEJST_VERSION}",
+                "tract_boundaries": "2010 census tracts",
+            },
         )
     )
 )
