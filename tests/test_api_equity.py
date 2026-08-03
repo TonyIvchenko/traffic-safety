@@ -207,6 +207,13 @@ def test_equity_summary_by_geoid(summary_client):
     assert payload["crash_disparity_ratio"] == pytest.approx(4.0)
 
 
+def test_equity_summary_includes_weighted_burden(summary_client):
+    payload = summary_client.get("/v1/equity/summary").json()
+    burden = payload["weighted_burden"]
+    assert "burden_ratio" in burden and "crash_weighted_svi" in burden
+    assert burden["svi_weighted_crashes"] > 0
+
+
 def test_equity_summary_unknown_geoid(summary_client):
     payload = summary_client.get("/v1/equity/summary?geoid=99").json()
     assert payload["segments"] == 0

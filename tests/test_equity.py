@@ -308,6 +308,45 @@ def test_equity_disparity_empty():
     result = equity.equity_disparity(_disparity_overlay().iloc[0:0])
     assert result["segments"] == 0
     assert result["crash_disparity_ratio"] is None
+    assert result["weighted_burden"]["burden_ratio"] is None
+
+
+def test_svi_weighted_crashes():
+    assert equity.svi_weighted_crashes(10, 0.9) == 9.0
+    assert equity.svi_weighted_crashes(5, None) == 0.0  # unknown SVI weights 0
+    assert equity.svi_weighted_crashes(4, -1.0) == 0.0  # out-of-range clamped
+    assert equity.svi_weighted_crashes("bad", 0.5) == 0.0
+
+
+def test_crash_burden_index_concentration():
+    frame = pd.DataFrame({"crashes": [10.0, 2.0], "svi_percentile": [0.9, 0.1]})
+    burden = equity.crash_burden_index(frame)
+    # crash-weighted SVI = (10*0.9 + 2*0.1)/12 = 9.2/12 = 0.7667.
+    assert burden["svi_weighted_crashes"] == pytest.approx(9.2)
+    assert burden["crash_weighted_svi"] == pytest.approx(0.7667, abs=1e-4)
+    assert burden["segment_mean_svi"] == pytest.approx(0.5)
+    # crashes over-concentrate in the vulnerable tract -> ratio > 1.
+    assert burden["burden_ratio"] == pytest.approx(0.7667 / 0.5, abs=1e-3)
+
+
+def test_crash_burden_index_excludes_unknown_svi():
+    frame = pd.DataFrame({"crashes": [10.0, 5.0], "svi_percentile": [0.8, None]})
+    burden = equity.crash_burden_index(frame)
+    assert burden["crashes_with_known_svi"] == 10.0  # the unknown-SVI crash excluded
+    assert burden["crash_weighted_svi"] == pytest.approx(0.8)
+
+
+def test_crash_burden_index_empty():
+    burden = equity.crash_burden_index(pd.DataFrame({"crashes": [], "svi_percentile": []}))
+    assert burden["burden_ratio"] is None
+    assert burden["crashes_with_known_svi"] == 0.0
+
+
+def test_equity_disparity_includes_weighted_burden():
+    result = equity.equity_disparity(_disparity_overlay())
+    burden = result["weighted_burden"]
+    assert "burden_ratio" in burden
+    assert burden["svi_weighted_crashes"] > 0
 
 
 def test_equity_disparity_all_disadvantaged_ratio_none():

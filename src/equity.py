@@ -44,6 +44,14 @@ def _round(value):
     return None if value is None else round(float(value), 4)
 
 
+def _num(value, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return default if math.isnan(number) else number
+
+
 def _to_bool(value) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in _TRUE_STRINGS
@@ -260,6 +268,58 @@ def _ratio(numerator: float, denominator: float):
     return round(numerator / denominator, 3) if denominator else None
 
 
+_EMPTY_BURDEN = {
+    "crashes_with_known_svi": 0.0,
+    "svi_weighted_crashes": 0.0,
+    "crash_weighted_svi": None,
+    "segment_mean_svi": None,
+    "burden_ratio": None,
+}
+
+
+def svi_weighted_crashes(crashes, svi_percentile) -> float:
+    """Crashes weighted by tract social vulnerability (crashes x SVI). Unknown or
+    out-of-range SVI weights 0 — a crash in a more vulnerable tract counts for more."""
+    return round(_num(crashes) * max(0.0, _num(svi_percentile)), 4)
+
+
+def crash_burden_index(frame: "pd.DataFrame") -> dict:
+    """SVI-weighted crash burden over a segment frame.
+
+    ``crash_weighted_svi`` is the mean social vulnerability *experienced per
+    crash* (crashes as weights); ``burden_ratio`` compares it to the unweighted
+    segment-mean SVI, so >1 means crashes concentrate in more-vulnerable tracts.
+    Computed over segments with a known SVI. (A true per-capita rate would need
+    tract population, which the equity index does not currently carry.)
+    """
+    if "crashes" in frame.columns:
+        crashes = pd.to_numeric(frame["crashes"], errors="coerce").fillna(0.0)
+    else:
+        crashes = pd.Series(0.0, index=frame.index)
+    if "svi_percentile" in frame.columns:
+        svi = pd.to_numeric(frame["svi_percentile"], errors="coerce")
+    else:
+        svi = pd.Series(float("nan"), index=frame.index)
+
+    known = svi.notna()
+    crashes_known = float(crashes[known].sum())
+    weighted = float((crashes[known] * svi[known]).sum())
+    crash_weighted_svi = weighted / crashes_known if crashes_known else None
+    segment_mean_svi = float(svi[known].mean()) if bool(known.any()) else None
+    burden_ratio = (
+        crash_weighted_svi / segment_mean_svi
+        if (crash_weighted_svi is not None and segment_mean_svi)
+        else None
+    )
+    return {
+        "crashes_with_known_svi": round(crashes_known, 3),
+        "svi_weighted_crashes": round(weighted, 3),
+        "crash_weighted_svi": round(crash_weighted_svi, 4) if crash_weighted_svi is not None else None,
+        "segment_mean_svi": round(segment_mean_svi, 4) if segment_mean_svi is not None else None,
+        "burden_ratio": round(burden_ratio, 3) if burden_ratio is not None else None,
+    }
+
+
 def equity_disparity(frame: "pd.DataFrame") -> dict:
     """Crash/risk equity disparity over a (pre-scoped) segment overlay frame.
 
@@ -269,7 +329,9 @@ def equity_disparity(frame: "pd.DataFrame") -> dict:
     """
     n = int(len(frame))
     if n == 0:
-        return dict(_EMPTY_DISPARITY)
+        empty = dict(_EMPTY_DISPARITY)
+        empty["weighted_burden"] = dict(_EMPTY_BURDEN)
+        return empty
 
     disadvantaged = (
         frame["disadvantaged"].map(_to_bool).astype(bool)
@@ -318,6 +380,7 @@ def equity_disparity(frame: "pd.DataFrame") -> dict:
         "mean_risk_disadvantaged": round(risk_disadvantaged, 4),
         "mean_risk_other": round(risk_other, 4),
         "risk_disparity_ratio": _ratio(risk_disadvantaged, risk_other),
+        "weighted_burden": crash_burden_index(frame),
     }
 
 
