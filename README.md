@@ -223,6 +223,64 @@ GEOIDs are 2-digit (state), 5-digit (county), or 11-digit (census tract);
   or a substitute for an engineering study.** Validate corridor rankings on the
   ground before programming funds.
 
+## Equity & Justice40 Overlay
+
+Surfaces road segments that are both **high-risk and underserved** by joining the
+risk model to two federal equity datasets at census-tract level: the CDC/ATSDR
+**Social Vulnerability Index (SVI)** and the **Justice40 / CEJST** "disadvantaged
+community" designation. This supports Justice40 reporting (the goal that 40% of
+benefits flow to disadvantaged communities) and equitable project prioritization.
+
+### Build the datasets (offline)
+
+```bash
+conda run -n playground python scripts/download_equity_data.py   # CDC SVI + CEJST CSVs -> data/raw/equity/
+conda run -n playground python scripts/build_equity_index.py     # per-tract index      -> data/processed/equity/tract_equity.csv.gz
+conda run -n playground python scripts/build_equity_overlay.py   # per-segment overlay  -> data/processed/equity/segment_equity.parquet
+```
+
+- `download_equity_data.py` fetches the source CSVs (`--svi-url` / `--cejst-url`
+  override the defaults, since these federal endpoints move).
+- `build_equity_index.py` joins SVI (`RPL_THEMES` percentile) and CEJST
+  (`Identified as disadvantaged`) per tract.
+- `build_equity_overlay.py` attaches each segment's tract equity, forecast risk,
+  and crash count.
+
+Serving paths are configurable via `TRAFFIC_SAFETY_EQUITY_PATH` (tract index) and
+`TRAFFIC_SAFETY_EQUITY_OVERLAY_PATH` (segment overlay).
+
+### Serve the analysis (`/v1/equity`)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /v1/equity/point?lat=&lon=` | Tract SVI percentile + band + Justice40 flag at a location |
+| `GET /v1/equity/hotspots` | High-risk segments in disadvantaged / high-SVI tracts (`only_disadvantaged`, `min_svi`, bbox; JSON or `?format=geojson`) |
+| `GET /v1/equity/summary?geoid=` | Crash/risk disparity for a jurisdiction (disparity ratios, SVI-weighted crash burden) |
+| `GET /v1/equity/choropleth` | Tract-level equity map as GeoJSON (SVI / Justice40 / risk) |
+
+```bash
+# Equity at a point
+curl "http://127.0.0.1:8080/v1/equity/point?lat=34.0522&lon=-118.2437"
+
+# Equity-prioritized hotspots (dangerous AND underserved) as GeoJSON
+curl "http://127.0.0.1:8080/v1/equity/hotspots?only_disadvantaged=true&format=geojson"
+
+# County disparity: are crashes/risk disproportionately in disadvantaged tracts?
+curl "http://127.0.0.1:8080/v1/equity/summary?geoid=06037"
+```
+
+### Provenance & caveats
+
+- **Sources:** CDC/ATSDR SVI and CEJST (Justice40). SVI and CEJST are paired on a
+  common **2010 census-tract** vintage; road segments are tagged from TIGER 2024
+  (**2020 tracts**), so the overlay join covers tracts unchanged between 2010 and
+  2020 and leaves re-tracted segments with unknown equity (a 2010→2020 crosswalk
+  would close the gap).
+- The crash-burden metric weights crashes by SVI; it is **not** a true per-capita
+  rate (the index does not carry tract population).
+- Equity flags describe **communities, not individuals**, and are decision-support
+  inputs — not a substitute for community engagement.
+
 ## Recommended Shape
 
 The most practical nationwide design is a two-layer system:
