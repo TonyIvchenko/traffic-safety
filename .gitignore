@@ -22,7 +22,8 @@ models/
 tiles/
 infra/
 dist/
-data/
+data/*
+!data/reference/
 paper/
 
 # Logs
