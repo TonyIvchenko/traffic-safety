@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+import pytest
+
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -106,3 +108,57 @@ def test_real_catalog_urban_arterial_recommends_something():
     assert result, "expected recommendations for an urban arterial"
     assert all(r["match_score"] >= 0.2 for r in result)
     assert any(r["vru_focused"] for r in result)  # a VRU treatment surfaces
+
+
+# --- Benefit-cost -------------------------------------------------------------
+
+_RUMBLE = {"id": "rumble_strips", "cmf": 0.74, "typical_cost_usd": 15000, "cost_unit": "per_mile"}
+_HAWK = {"id": "hawk", "cmf": 0.45, "typical_cost_usd": 120000, "cost_unit": "per_location"}
+
+
+def test_annualize_crashes():
+    assert cm.annualize_crashes(15, 5) == pytest.approx(3.0)
+    assert cm.annualize_crashes(15, 0) == pytest.approx(15.0)  # 0 years -> treat as 1
+    assert cm.annualize_crashes(-4, 5) == 0.0
+
+
+def test_treatment_cost_per_mile_scales_with_length():
+    # 1.60934 km ~= 1 mile.
+    cost = cm.treatment_cost(_RUMBLE, length_km=1.60934)
+    assert cost == pytest.approx(15000, abs=5)
+
+
+def test_treatment_cost_per_location_is_flat():
+    assert cm.treatment_cost(_HAWK, length_km=3.0) == pytest.approx(120000)
+
+
+def test_countermeasure_benefit_cost_structure():
+    bc = cm.countermeasure_benefit_cost(_RUMBLE, expected_annual_crashes=2.0, length_km=1.60934)
+    # CRF 0.26 * 2/yr = 0.52 crashes avoided per year.
+    assert bc["annual_crashes_reduced"] == pytest.approx(0.52)
+    assert bc["crash_reduction"] == pytest.approx(0.26)
+    assert bc["countermeasure_id"] == "rumble_strips"
+    assert bc["treatment_cost"] == pytest.approx(15000, abs=5)
+    assert bc["benefit_cost_ratio"] > 0
+    assert bc["net_benefit"] > 0  # fatal-crash value dwarfs a low-cost treatment
+
+
+def test_lower_cmf_yields_higher_benefit():
+    strong = cm.countermeasure_benefit_cost(
+        {"id": "x", "cmf": 0.4, "typical_cost_usd": 15000, "cost_unit": "per_mile"},
+        expected_annual_crashes=2.0, length_km=1.0,
+    )
+    weak = cm.countermeasure_benefit_cost(
+        {"id": "y", "cmf": 0.9, "typical_cost_usd": 15000, "cost_unit": "per_mile"},
+        expected_annual_crashes=2.0, length_km=1.0,
+    )
+    assert strong["annual_benefit"] > weak["annual_benefit"]
+    assert strong["benefit_cost_ratio"] > weak["benefit_cost_ratio"]
+
+
+def test_crash_cost_override():
+    bc = cm.countermeasure_benefit_cost(
+        _RUMBLE, expected_annual_crashes=2.0, length_km=1.0, crash_cost=100000
+    )
+    assert bc["crash_cost_each"] == 100000
+    assert bc["annual_benefit"] == pytest.approx(0.52 * 100000)

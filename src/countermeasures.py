@@ -18,9 +18,12 @@ REPO_DIR = SRC_DIR.parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+import cmf_math
+import crash_costs
 import crash_typing
 
 REFERENCE_PATH = REPO_DIR / "data" / "reference" / "countermeasures.json"
+KM_TO_MILE = 0.621371
 
 _PUBLIC_FIELDS = (
     "id", "name", "category", "cmf", "cmf_basis", "cmf_star_rating",
@@ -102,3 +105,63 @@ def applicable_countermeasures(
 
     matches.sort(key=lambda m: (m["match_score"], m["crash_reduction"]), reverse=True)
     return matches[: int(top_n)]
+
+
+# --- Benefit-cost of applying a countermeasure --------------------------------
+
+
+def annualize_crashes(total_crashes, analysis_years) -> float:
+    """Average annual crashes from a multi-year total."""
+    years = int(analysis_years) if analysis_years else 0
+    years = years if years > 0 else 1
+    return max(0.0, float(total_crashes or 0.0)) / years
+
+
+def treatment_cost(cm: dict, *, length_km=None) -> float:
+    """Total install cost: per-mile treatments scale by segment length; per-
+    intersection / per-location treatments are a flat unit cost."""
+    cost = float(cm.get("typical_cost_usd", 0.0) or 0.0)
+    if cm.get("cost_unit") == "per_mile":
+        miles = max(0.0, float(length_km or 0.0)) * KM_TO_MILE
+        return round(cost * miles, 2)
+    return round(cost, 2)
+
+
+def countermeasure_benefit_cost(
+    cm: dict,
+    *,
+    expected_annual_crashes: float,
+    crash_cost=None,
+    length_km=None,
+    service_life_years=None,
+    discount_rate=None,
+) -> dict:
+    """Benefit-cost of one treatment on one segment.
+
+    Values the annual crashes it would avoid (``CRF * expected``) at the FHWA
+    comprehensive fatal-crash cost, discounts over the service life, and compares
+    to the install cost. Returns the crash_costs.benefit_cost dict plus the
+    treatment inputs.
+    """
+    cmf = float(cm["cmf"])
+    reduced = cmf_math.crashes_reduced(expected_annual_crashes, cmf)
+    unit_cost = crash_costs.severity_cost("K") if crash_cost is None else float(crash_cost)
+    annual_benefit = reduced * unit_cost
+    cost = treatment_cost(cm, length_km=length_km)
+    service_life = (
+        crash_costs.DEFAULT_SERVICE_LIFE_YEARS if service_life_years is None else int(service_life_years)
+    )
+    rate = crash_costs.DEFAULT_DISCOUNT_RATE if discount_rate is None else float(discount_rate)
+
+    result = crash_costs.benefit_cost(annual_benefit, cost, service_life, rate)
+    result.update(
+        {
+            "countermeasure_id": cm.get("id"),
+            "cmf": cmf,
+            "crash_reduction": round(1.0 - cmf, 4),
+            "expected_annual_crashes": round(max(0.0, float(expected_annual_crashes or 0.0)), 4),
+            "annual_crashes_reduced": round(reduced, 4),
+            "crash_cost_each": unit_cost,
+        }
+    )
+    return result
