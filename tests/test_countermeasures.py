@@ -162,3 +162,87 @@ def test_crash_cost_override():
     )
     assert bc["crash_cost_each"] == 100000
     assert bc["annual_benefit"] == pytest.approx(0.52 * 100000)
+
+
+# --- recommend_countermeasures + CountermeasureStore --------------------------
+
+import pandas as pd  # noqa: E402
+
+
+def test_recommend_countermeasures_ranked_with_benefit_cost():
+    attrs = {"mtfcc": "S1200", "rur_urb": 2, "length_km": 1.5, "fatal_crashes": 6.0}
+    recs = cm.recommend_countermeasures(attrs, analysis_years=5, catalog=_CATALOG, vru_share=0.7)
+    assert recs, "expected recommendations for an urban arterial"
+    assert "benefit_cost" in recs[0] and "benefit_cost_ratio" in recs[0]["benefit_cost"]
+    ratios = [r["benefit_cost"]["benefit_cost_ratio"] or 0.0 for r in recs]
+    assert ratios == sorted(ratios, reverse=True)  # ranked by BCR
+
+
+def _segment_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "segment_id": ["seg-1", "seg-2"],
+            "fullname": ["Main St", "Rural Rd"],
+            "mtfcc": ["S1200", "S1100"],
+            "rur_urb": [2, 1],
+            "length_km": [1.5, 2.0],
+            "center_lat": [34.0, 36.0],
+            "center_lon": [-118.2, -119.0],
+            "fatal_crashes": [6.0, 10.0],
+            "hin_rank": [1, 2],
+        }
+    )
+
+
+def test_store_from_parquet_and_recommend(tmp_path):
+    path = tmp_path / "hin.parquet"
+    _segment_frame().to_parquet(path, index=False)
+    store = cm.CountermeasureStore.from_parquet(path, analysis_years=5)
+    assert len(store) == 2
+
+    result = store.recommend("seg-1")
+    assert result["segment"]["segment_id"] == "seg-1"
+    assert result["analysis_years"] == 5
+    assert result["count"] >= 1
+    assert result["recommendations"][0]["benefit_cost"]["benefit_cost_ratio"] > 0
+    import json
+
+    json.dumps(result)  # JSON-safe (no numpy/NaN leak)
+
+
+def test_store_recommend_nan_fields_no_nan_leak(tmp_path):
+    import json
+
+    import numpy as np
+
+    frame = pd.DataFrame(
+        {
+            "segment_id": ["seg-nan"], "fullname": ["X"], "mtfcc": ["S1200"], "rur_urb": [2],
+            "length_km": [np.nan], "center_lat": [34.0], "center_lon": [-118.2],
+            "fatal_crashes": [np.nan], "hin_rank": [1],
+        }
+    )
+    path = tmp_path / "hin.parquet"
+    frame.to_parquet(path, index=False)
+    result = cm.CountermeasureStore.from_parquet(path).recommend("seg-nan")
+    # NaN inputs degrade to 0; nothing NaN leaks (allow_nan=False raises on NaN).
+    json.dumps(result, allow_nan=False)
+
+
+def test_store_unknown_segment_returns_none(tmp_path):
+    path = tmp_path / "hin.parquet"
+    _segment_frame().to_parquet(path, index=False)
+    assert cm.CountermeasureStore.from_parquet(path).recommend("nope") is None
+
+
+def test_store_missing_file_is_empty(tmp_path):
+    store = cm.CountermeasureStore.from_parquet(tmp_path / "nope.parquet")
+    assert len(store) == 0
+    assert store.recommend("seg-1") is None
+
+
+def test_load_store_honors_env(tmp_path, monkeypatch):
+    path = tmp_path / "hin.parquet"
+    _segment_frame().to_parquet(path, index=False)
+    monkeypatch.setenv(cm.CM_SEGMENTS_PATH_ENV, str(path))
+    assert len(cm.load_countermeasure_store()) == 2

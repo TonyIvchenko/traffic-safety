@@ -205,6 +205,7 @@ class V1Dependencies:
     equity_provider: Callable[..., dict]
     equity_overlay_provider: Callable[[], object]
     equity_vintage: dict
+    countermeasure_provider: Callable[[], object]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -1305,6 +1306,25 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             media_type="application/geo+json",
             headers={"Cache-Control": "public, max-age=3600"},
         )
+
+    @router.get(
+        "/countermeasures/segment",
+        response_model=None,
+        summary="Ranked FHWA countermeasures with CMF benefit-cost for a segment",
+    )
+    def countermeasures_segment(
+        response: Response,
+        segment_id: str = Query(..., description="HIN segment id"),
+        top_n: int = Query(5, ge=1, le=20),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        result = deps.countermeasure_provider().recommend(segment_id.strip(), top_n=top_n)
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no segment '{segment_id}' in the High Injury Network",
+            )
+        return result
 
     def _authorized_watch(watch_id: str, token: str) -> dict:
         store = deps.watch_store_provider()

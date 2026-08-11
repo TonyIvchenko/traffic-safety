@@ -77,6 +77,7 @@ from predict import (
 )
 from api_ratelimit import install_rate_limit_middleware, rate_limiter_from_env
 from api_v1 import V1Dependencies, build_v1_router
+from countermeasures import load_countermeasure_store as _get_countermeasure_store
 from equity import equity_for_tract as _equity_for_tract
 from equity import load_equity_overlay as _get_equity_overlay
 from geo_lookup import tract_of as _tract_of
@@ -1143,6 +1144,7 @@ api.include_router(
                 "cejst": f"CEJST {CEJST_VERSION}",
                 "tract_boundaries": "2010 census tracts",
             },
+            countermeasure_provider=_get_countermeasure_store,
         )
     )
 )
