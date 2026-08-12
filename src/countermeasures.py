@@ -242,6 +242,23 @@ def _json_scalar(value):
     return value.item() if hasattr(value, "item") else value
 
 
+def _coord(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number else number
+
+
+def _in_bbox(segment: dict, bbox) -> bool:
+    lat = _coord(segment.get("center_lat"))
+    lon = _coord(segment.get("center_lon"))
+    if lat is None or lon is None:
+        return False
+    min_lat, max_lat, min_lon, max_lon = bbox
+    return min_lat <= lat <= max_lat and min_lon <= lon <= max_lon
+
+
 class CountermeasureStore:
     """Segment lookup (from the HIN parquet) that serves ranked recommendations."""
 
@@ -289,6 +306,51 @@ class CountermeasureStore:
             "count": len(recommendations),
             "recommendations": recommendations,
         }
+
+    def _hotspot_record(self, segment: dict, recs_per_segment: int) -> dict:
+        recommendations = recommend_countermeasures(
+            segment, analysis_years=self._analysis_years, top_n=recs_per_segment
+        )
+        record = {
+            field: _json_scalar(segment[field])
+            for field in _SEGMENT_FIELDS
+            if field in segment
+        }
+        record["applicable_count"] = len(recommendations)
+        top = recommendations[0] if recommendations else None
+        record["recommended"] = (
+            {
+                "id": top.get("id"),
+                "name": top.get("name"),
+                "cmf": top.get("cmf"),
+                "crash_reduction": top.get("crash_reduction"),
+                "annual_crashes_reduced": top.get("annual_crashes_reduced"),
+                "benefit_cost_ratio": top["benefit_cost"].get("benefit_cost_ratio"),
+                "net_benefit": top["benefit_cost"].get("net_benefit"),
+                "treatment_cost": top["benefit_cost"].get("treatment_cost"),
+            }
+            if top is not None
+            else None
+        )
+        return record
+
+    def hotspots(
+        self,
+        *,
+        bbox=None,
+        top_n: int = 50,
+        recs_per_segment: int = 5,
+        min_fatal_crashes: float = 0.0,
+    ) -> list[dict]:
+        """Highest-crash segments (optionally in ``bbox``), each with its
+        top-benefit-cost recommended treatment."""
+        segments = list(self._segments.values())
+        if bbox is not None:
+            segments = [segment for segment in segments if _in_bbox(segment, bbox)]
+        threshold = float(min_fatal_crashes)
+        segments = [s for s in segments if _num(s.get("fatal_crashes")) >= threshold]
+        segments.sort(key=lambda s: _num(s.get("fatal_crashes")), reverse=True)
+        return [self._hotspot_record(s, recs_per_segment) for s in segments[: int(top_n)]]
 
 
 @lru_cache(maxsize=4)

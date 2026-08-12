@@ -21,23 +21,26 @@ def load_module():
 MODULE = load_module()
 
 
-@pytest.fixture()
-def cm_client(tmp_path, monkeypatch):
-    frame = pd.DataFrame(
+def _hin_frame() -> pd.DataFrame:
+    return pd.DataFrame(
         {
-            "segment_id": ["seg-1"],
-            "fullname": ["Main St"],
-            "mtfcc": ["S1200"],
-            "rur_urb": [2],
-            "length_km": [1.5],
-            "center_lat": [34.0],
-            "center_lon": [-118.2],
-            "fatal_crashes": [6.0],
-            "hin_rank": [1],
+            "segment_id": ["seg-1", "seg-2"],
+            "fullname": ["Main St", "Rural Rd"],
+            "mtfcc": ["S1200", "S1100"],
+            "rur_urb": [2, 1],
+            "length_km": [1.5, 2.0],
+            "center_lat": [34.0, 36.0],
+            "center_lon": [-118.2, -119.0],
+            "fatal_crashes": [6.0, 10.0],
+            "hin_rank": [2, 1],
         }
     )
+
+
+@pytest.fixture()
+def cm_client(tmp_path, monkeypatch):
     path = tmp_path / "hin.parquet"
-    frame.to_parquet(path, index=False)
+    _hin_frame().to_parquet(path, index=False)
     monkeypatch.setenv("TRAFFIC_SAFETY_CM_SEGMENTS_PATH", str(path))
     return TestClient(MODULE.api)
 
@@ -68,3 +71,35 @@ def test_countermeasures_segment_unknown_is_404(cm_client):
 
 def test_countermeasures_segment_requires_id(cm_client):
     assert cm_client.get("/v1/countermeasures/segment").status_code == 422
+
+
+def test_countermeasures_hotspots_json(cm_client):
+    response = cm_client.get("/v1/countermeasures/hotspots")
+    assert response.status_code == 200
+    payload = response.json()
+    # Ranked by fatal_crashes desc: seg-2 (10) before seg-1 (6).
+    assert [h["segment_id"] for h in payload["hotspots"]] == ["seg-2", "seg-1"]
+    assert payload["hotspots"][0]["recommended"] is not None
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_countermeasures_hotspots_geojson(cm_client):
+    response = cm_client.get("/v1/countermeasures/hotspots?format=geojson")
+    assert response.headers["content-type"].startswith("application/geo+json")
+    payload = response.json()
+    assert payload["type"] == "FeatureCollection"
+    feature = payload["features"][0]
+    assert feature["geometry"]["type"] == "Point"
+    assert "recommended" in feature["properties"]
+    assert "center_lat" not in feature["properties"]
+
+
+def test_countermeasures_hotspots_bbox(cm_client):
+    payload = cm_client.get(
+        "/v1/countermeasures/hotspots?min_lat=33.9&max_lat=34.1&min_lon=-118.3&max_lon=-118.1"
+    ).json()
+    assert {h["segment_id"] for h in payload["hotspots"]} == {"seg-1"}
+
+
+def test_countermeasures_hotspots_partial_bbox_is_422(cm_client):
+    assert cm_client.get("/v1/countermeasures/hotspots?min_lat=34.0").status_code == 422

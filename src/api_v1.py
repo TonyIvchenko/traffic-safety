@@ -592,6 +592,28 @@ def _equity_choropleth_geojson(records: list[dict], geometry_of=None) -> dict:
     return {"type": "FeatureCollection", "count": len(features), "features": features}
 
 
+def _countermeasure_hotspots_geojson(hotspots: list[dict]) -> dict:
+    """Point features at hotspot centroids, carrying the recommended treatment."""
+    features = []
+    for hotspot in hotspots:
+        lat = _safe_float(hotspot.get("center_lat"))
+        lon = _safe_float(hotspot.get("center_lon"))
+        if lat is None or lon is None:
+            continue
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    key: value
+                    for key, value in hotspot.items()
+                    if key not in ("center_lat", "center_lon")
+                },
+            }
+        )
+    return {"type": "FeatureCollection", "count": len(features), "features": features}
+
+
 def build_v1_router(deps: V1Dependencies) -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["v1"])
 
@@ -1325,6 +1347,45 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 detail=f"no segment '{segment_id}' in the High Injury Network",
             )
         return result
+
+    @router.get(
+        "/countermeasures/hotspots",
+        response_model=None,
+        summary="Top crash-risk segments each with a recommended treatment + BCR (JSON or GeoJSON)",
+    )
+    def countermeasures_hotspots(
+        response: Response,
+        min_lat: float | None = Query(None, ge=-90.0, le=90.0),
+        max_lat: float | None = Query(None, ge=-90.0, le=90.0),
+        min_lon: float | None = Query(None, ge=-180.0, le=180.0),
+        max_lon: float | None = Query(None, ge=-180.0, le=180.0),
+        top_n: int = Query(50, ge=1, le=500),
+        min_fatal_crashes: float = Query(0.0, ge=0.0),
+        output_format: str = Query("json", alias="format", description="'json' or 'geojson'"),
+    ):
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        bbox_values = (min_lat, max_lat, min_lon, max_lon)
+        bbox = None
+        if any(value is not None for value in bbox_values):
+            if any(value is None for value in bbox_values):
+                raise HTTPException(
+                    status_code=422,
+                    detail="bbox requires all of min_lat, max_lat, min_lon, max_lon",
+                )
+            if min_lat > max_lat or min_lon > max_lon:
+                raise HTTPException(status_code=422, detail="bbox min must be <= max")
+            bbox = bbox_values
+
+        hotspots = deps.countermeasure_provider().hotspots(
+            bbox=bbox, top_n=top_n, min_fatal_crashes=min_fatal_crashes
+        )
+        if output_format.strip().lower() == "geojson":
+            return JSONResponse(
+                content=_countermeasure_hotspots_geojson(hotspots),
+                media_type="application/geo+json",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+        return {"count": len(hotspots), "hotspots": hotspots}
 
     def _authorized_watch(watch_id: str, token: str) -> dict:
         store = deps.watch_store_provider()

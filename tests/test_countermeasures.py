@@ -246,3 +246,26 @@ def test_load_store_honors_env(tmp_path, monkeypatch):
     _segment_frame().to_parquet(path, index=False)
     monkeypatch.setenv(cm.CM_SEGMENTS_PATH_ENV, str(path))
     assert len(cm.load_countermeasure_store()) == 2
+
+
+def test_store_hotspots_ranked_with_recommendation(tmp_path):
+    path = tmp_path / "hin.parquet"
+    _segment_frame().to_parquet(path, index=False)  # seg-1 fatal 6, seg-2 fatal 10
+    hotspots = cm.CountermeasureStore.from_parquet(path).hotspots()
+    assert [h["segment_id"] for h in hotspots] == ["seg-2", "seg-1"]  # by fatal_crashes desc
+    assert hotspots[0]["recommended"] is not None
+    assert "benefit_cost_ratio" in hotspots[0]["recommended"]
+    import json
+
+    json.dumps(hotspots)  # JSON-safe
+
+
+def test_store_hotspots_bbox_and_min_fatal(tmp_path):
+    path = tmp_path / "hin.parquet"
+    _segment_frame().to_parquet(path, index=False)
+    store = cm.CountermeasureStore.from_parquet(path)
+    # bbox over seg-1 only (34.0/-118.2).
+    in_la = store.hotspots(bbox=(33.9, 34.1, -118.3, -118.1))
+    assert {h["segment_id"] for h in in_la} == {"seg-1"}
+    # min_fatal_crashes filters seg-1 (6) out, keeps seg-2 (10).
+    assert {h["segment_id"] for h in store.hotspots(min_fatal_crashes=8)} == {"seg-2"}
