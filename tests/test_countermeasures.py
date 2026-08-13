@@ -50,6 +50,13 @@ def test_get_countermeasure():
     assert cm.get_countermeasure("nope", catalog=_CATALOG) is None
 
 
+def test_catalog_metadata():
+    meta = cm.catalog_metadata()
+    assert meta["version"]
+    assert meta["source"]
+    assert meta["count"] == len(cm.load_countermeasures())
+
+
 def test_rural_highway_recommends_run_off_road_treatment():
     attrs = {"mtfcc": "S1100", "rur_urb": 1}
     profile = ct.crash_type_profile(rur_urb=1, mtfcc="S1100")  # run_off_road dominant

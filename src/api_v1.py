@@ -206,6 +206,7 @@ class V1Dependencies:
     equity_overlay_provider: Callable[[], object]
     equity_vintage: dict
     countermeasure_provider: Callable[[], object]
+    countermeasure_meta: dict
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -714,6 +715,23 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "Tract-level social vulnerability (CDC/ATSDR SVI) and Justice40 "
                     "disadvantaged status (CEJST) joined to road segments; SVI and "
                     "CEJST share 2010 census-tract boundaries."
+                ),
+            },
+            "countermeasures": {
+                "enabled": True,
+                "segments": len(deps.countermeasure_provider()),
+                "catalog_version": deps.countermeasure_meta.get("version"),
+                "catalog_size": deps.countermeasure_meta.get("count"),
+                "cmf_source": deps.countermeasure_meta.get("source"),
+                "endpoints": [
+                    "/v1/countermeasures/segment",
+                    "/v1/countermeasures/hotspots",
+                ],
+                "formats": ["json", "geojson"],
+                "note": (
+                    "FHWA Proven Safety Countermeasures matched to High Injury Network "
+                    "segments with Crash Modification Factor benefit-cost (representative "
+                    "CMFs, not project-specific)."
                 ),
             },
             "docs_url": "/v1/docs",

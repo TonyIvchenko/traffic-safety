@@ -45,6 +45,18 @@ def cm_client(tmp_path, monkeypatch):
     return TestClient(MODULE.api)
 
 
+def test_meta_advertises_countermeasures(cm_client):
+    payload = cm_client.get("/v1/meta").json()
+    block = payload["countermeasures"]
+    assert block["enabled"] is True
+    assert block["segments"] == 2  # the fixture HIN has two segments
+    assert block["catalog_size"] >= 10
+    assert block["catalog_version"]
+    assert set(block["endpoints"]) == {
+        "/v1/countermeasures/segment", "/v1/countermeasures/hotspots"
+    }
+
+
 def test_countermeasures_segment_returns_ranked_recommendations(cm_client):
     response = cm_client.get("/v1/countermeasures/segment?segment_id=seg-1")
     assert response.status_code == 200

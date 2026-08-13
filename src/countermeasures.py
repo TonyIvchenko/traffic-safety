@@ -55,6 +55,20 @@ def load_countermeasures(path=None) -> list[dict]:
     return list(data.get("countermeasures", []))
 
 
+@lru_cache(maxsize=2)
+def catalog_metadata(path=None) -> dict:
+    """Version / source / size of the countermeasure reference catalog."""
+    try:
+        data = json.loads(Path(path or REFERENCE_PATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"version": None, "source": None, "count": 0}
+    return {
+        "version": data.get("schema_version"),
+        "source": data.get("source"),
+        "count": len(data.get("countermeasures", [])),
+    }
+
+
 def get_countermeasure(cm_id: str, *, catalog=None) -> dict | None:
     for cm in catalog if catalog is not None else load_countermeasures():
         if cm.get("id") == cm_id:
