@@ -247,6 +247,63 @@ def recommend_countermeasures(
     return out
 
 
+def hin_cmf_benefit_cost(
+    corridors,
+    *,
+    analysis_years: int,
+    service_life_years=None,
+    discount_rate=None,
+    fatal_cost=None,
+    catalog=None,
+) -> dict | None:
+    """Benefit-cost of treating HIN corridors using corridor-specific CMFs.
+
+    Replaces a flat crash-reduction assumption: each corridor is matched to its
+    best-benefit-cost countermeasure, and the resulting crash reductions and
+    treatment costs are summed and discounted. Corridors with no applicable
+    treatment are left untreated. Returns None if nothing is treatable.
+    """
+    corridors = [corridor for corridor in corridors if isinstance(corridor, dict)]
+    years = int(analysis_years)
+    if not corridors or years <= 0:
+        return None
+
+    unit_cost = crash_costs.severity_cost("K") if fatal_cost is None else float(fatal_cost)
+    total_annual_benefit = 0.0
+    total_treatment_cost = 0.0
+    reductions = []
+    for corridor in corridors:
+        recs = recommend_countermeasures(
+            corridor, analysis_years=years, top_n=3, catalog=catalog, crash_cost=unit_cost
+        )
+        if not recs:
+            continue
+        best = recs[0]  # highest benefit-cost ratio
+        benefit_cost = best.get("benefit_cost", {})
+        total_annual_benefit += _num(benefit_cost.get("annual_benefit"))
+        total_treatment_cost += _num(benefit_cost.get("treatment_cost"))
+        reductions.append(_num(best.get("crash_reduction")))
+
+    if not reductions:
+        return None
+
+    service_life = (
+        crash_costs.DEFAULT_SERVICE_LIFE_YEARS if service_life_years is None else int(service_life_years)
+    )
+    rate = crash_costs.DEFAULT_DISCOUNT_RATE if discount_rate is None else float(discount_rate)
+    result = crash_costs.benefit_cost(total_annual_benefit, total_treatment_cost, service_life, rate)
+    result.update(
+        {
+            "treated_corridors": len(reductions),
+            "mean_crash_reduction": round(sum(reductions) / len(reductions), 4),
+            "analysis_years": years,
+            "fatal_crash_cost": unit_cost,
+            "basis": "corridor-specific FHWA Crash Modification Factors",
+        }
+    )
+    return result
+
+
 def _json_scalar(value):
     try:
         if pd.isna(value):

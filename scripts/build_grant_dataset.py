@@ -41,6 +41,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import systemic
+from countermeasures import hin_cmf_benefit_cost
 from geo_lookup import load_county_index
 from grant_report import (
     DEFAULT_HIN_CRASH_REDUCTION,
@@ -122,6 +123,7 @@ def build_county_reports(
     data_vintage: dict | None = None,
     analysis_years: int | None = None,
     benefit_cost_config: dict | None = None,
+    benefit_cost_method: str = "cmf",
 ) -> dict[str, dict]:
     """One assembled grant report per county present in the tagged frames.
 
@@ -154,9 +156,12 @@ def build_county_reports(
         benefit_cost = None
         if analysis_years:
             corridors = top_hin_corridors(county_segments, top_n=top_n)
-            benefit_cost = hin_benefit_cost(
-                corridors, analysis_years=analysis_years, **(benefit_cost_config or {})
-            )
+            if str(benefit_cost_method).lower() == "flat":
+                benefit_cost = hin_benefit_cost(
+                    corridors, analysis_years=analysis_years, **(benefit_cost_config or {})
+                )
+            else:
+                benefit_cost = hin_cmf_benefit_cost(corridors, analysis_years=analysis_years)
         reports[geoid] = assemble_grant_report(
             geoid=geoid,
             name=names.get(geoid, geoid),
@@ -199,7 +204,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--treatment-cost-per-km", type=float, default=DEFAULT_TREATMENT_COST_PER_KM,
-        help="assumed corridor treatment cost per km for benefit-cost",
+        help="assumed corridor treatment cost per km (flat benefit-cost method only)",
+    )
+    parser.add_argument(
+        "--benefit-cost-method", choices=["cmf", "flat"], default="cmf",
+        help="cmf: corridor-specific Crash Modification Factors; flat: uniform reduction",
     )
     return parser.parse_args()
 
@@ -249,6 +258,7 @@ def main() -> None:
         generated_at=datetime.now(timezone.utc).isoformat(),
         data_vintage=data_vintage(crashes),
         analysis_years=analysis_span_years(crashes),
+        benefit_cost_method=args.benefit_cost_method,
         benefit_cost_config={
             "crash_reduction": args.crash_reduction,
             "treatment_cost_per_km": args.treatment_cost_per_km,

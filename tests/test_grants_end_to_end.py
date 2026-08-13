@@ -112,10 +112,12 @@ def test_pipeline_builds_a_coherent_county_report(built):
     # Systemic screening surfaces the history-poor local road in the county.
     assert "c" in {loc["segment_id"] for loc in la["systemic_locations"]}
 
+    # Benefit-cost now defaults to corridor-specific CMFs (F3.12).
     benefit_cost = la["benefit_cost"]
     assert benefit_cost["treated_corridors"] == 2
-    assert benefit_cost["annual_fatal_crashes_treated"] == pytest.approx(11 / ANALYSIS_YEARS)
+    assert 0.0 < benefit_cost["mean_crash_reduction"] < 1.0
     assert benefit_cost["benefit_cost_ratio"] > 0
+    assert benefit_cost["basis"].startswith("corridor-specific")
     json.dumps(la)  # the whole report survives a JSON round-trip
 
 

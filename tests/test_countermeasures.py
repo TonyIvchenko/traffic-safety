@@ -171,6 +171,43 @@ def test_crash_cost_override():
     assert bc["annual_benefit"] == pytest.approx(0.52 * 100000)
 
 
+# --- hin_cmf_benefit_cost (grant integration) ---------------------------------
+
+
+def _corridors():
+    return [
+        {"segment_id": "a", "mtfcc": "S1200", "fatal_crashes": 6.0, "length_km": 1.0},
+        {"segment_id": "b", "mtfcc": "S1100", "fatal_crashes": 4.0, "length_km": 2.0},
+    ]
+
+
+def test_hin_cmf_benefit_cost_treats_corridors():
+    result = cm.hin_cmf_benefit_cost(_corridors(), analysis_years=5)
+    assert result is not None
+    assert result["treated_corridors"] >= 1
+    assert 0.0 < result["mean_crash_reduction"] < 1.0
+    assert result["basis"].startswith("corridor-specific")
+    assert result["benefit_cost_ratio"] > 0
+    assert result["analysis_years"] == 5
+
+
+def test_hin_cmf_benefit_cost_empty_or_zero_years():
+    assert cm.hin_cmf_benefit_cost([], analysis_years=5) is None
+    assert cm.hin_cmf_benefit_cost(_corridors(), analysis_years=0) is None
+
+
+def test_hin_cmf_benefit_cost_no_applicable_treatment_returns_none():
+    # An MTFCC no countermeasure targets -> nothing treatable.
+    corridors = [{"segment_id": "x", "mtfcc": "S9999", "fatal_crashes": 5.0, "length_km": 1.0}]
+    assert cm.hin_cmf_benefit_cost(corridors, analysis_years=5) is None
+
+
+def test_hin_cmf_benefit_cost_json_serializable():
+    import json
+
+    json.dumps(cm.hin_cmf_benefit_cost(_corridors(), analysis_years=5))
+
+
 # --- recommend_countermeasures + CountermeasureStore --------------------------
 
 import pandas as pd  # noqa: E402
