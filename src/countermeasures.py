@@ -47,6 +47,26 @@ _PUBLIC_FIELDS = (
 # A treatment tagged with "total" addresses overall crashes, so it stays broadly
 # applicable wherever the roadway fits, at this baseline relevance.
 _TOTAL_RELEVANCE = 0.5
+CMF_UNCERTAINTY_NOTE = (
+    "CMFs are representative screening values; confidence reflects the FHWA CMF "
+    "Clearinghouse star rating. Confirm with a project-specific CMF and engineering "
+    "study before programming funds."
+)
+
+
+def cmf_confidence(star_rating) -> str:
+    """Confidence label from a CMF Clearinghouse star rating (1-5)."""
+    try:
+        stars = int(star_rating)
+    except (TypeError, ValueError):
+        return "unknown"
+    if stars >= 4:
+        return "high"
+    if stars == 3:
+        return "moderate"
+    if stars >= 1:
+        return "low"
+    return "unknown"
 
 
 @lru_cache(maxsize=4)
@@ -138,6 +158,7 @@ def applicable_countermeasures(
         record = _public(cm)
         record["match_score"] = round(score, 4)
         record["crash_reduction"] = round(1.0 - float(cm["cmf"]), 4)
+        record["cmf_confidence"] = cmf_confidence(cm.get("cmf_star_rating"))
         matches.append(record)
 
     matches.sort(key=lambda m: (m["match_score"], m["crash_reduction"]), reverse=True)
@@ -376,6 +397,7 @@ class CountermeasureStore:
             "analysis_years": self._analysis_years,
             "count": len(recommendations),
             "recommendations": recommendations,
+            "cmf_note": CMF_UNCERTAINTY_NOTE,
         }
 
     def _hotspot_record(self, segment: dict, recs_per_segment: int) -> dict:
@@ -394,6 +416,7 @@ class CountermeasureStore:
                 "id": top.get("id"),
                 "name": top.get("name"),
                 "cmf": top.get("cmf"),
+                "cmf_confidence": top.get("cmf_confidence"),
                 "crash_reduction": top.get("crash_reduction"),
                 "annual_crashes_reduced": top.get("annual_crashes_reduced"),
                 "benefit_cost_ratio": top["benefit_cost"].get("benefit_cost_ratio"),

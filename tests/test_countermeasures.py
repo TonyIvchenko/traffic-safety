@@ -57,6 +57,25 @@ def test_catalog_metadata():
     assert meta["count"] == len(cm.load_countermeasures())
 
 
+def test_cmf_confidence():
+    assert cm.cmf_confidence(5) == "high"
+    assert cm.cmf_confidence(4) == "high"
+    assert cm.cmf_confidence(3) == "moderate"
+    assert cm.cmf_confidence(2) == "low"
+    assert cm.cmf_confidence(1) == "low"
+    assert cm.cmf_confidence(None) == "unknown"
+    assert cm.cmf_confidence("bad") == "unknown"
+
+
+def test_applicable_countermeasures_carries_confidence():
+    attrs = {"mtfcc": "S1200", "rur_urb": 2}
+    profile = ct.crash_type_profile(rur_urb=2, mtfcc="S1200")
+    recs = cm.applicable_countermeasures(attrs, profile, catalog=_CATALOG)
+    assert all("cmf_confidence" in r for r in recs)
+    road_diet = next(r for r in recs if r["id"] == "road_diet")  # 4 stars -> high
+    assert road_diet["cmf_confidence"] == "high"
+
+
 def test_rural_highway_recommends_run_off_road_treatment():
     attrs = {"mtfcc": "S1100", "rur_urb": 1}
     profile = ct.crash_type_profile(rur_urb=1, mtfcc="S1100")  # run_off_road dominant

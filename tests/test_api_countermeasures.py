@@ -66,6 +66,9 @@ def test_countermeasures_segment_returns_ranked_recommendations(cm_client):
     top = payload["recommendations"][0]
     assert "cmf" in top and "benefit_cost" in top
     assert top["benefit_cost"]["benefit_cost_ratio"] > 0
+    # CMF confidence + uncertainty note are surfaced (F3.13).
+    assert top["cmf_confidence"] in {"low", "moderate", "high", "unknown"}
+    assert "cmf_note" in payload
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 
