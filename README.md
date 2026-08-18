@@ -281,6 +281,59 @@ curl "http://127.0.0.1:8080/v1/equity/summary?geoid=06037"
 - Equity flags describe **communities, not individuals**, and are decision-support
   inputs — not a substitute for community engagement.
 
+## Countermeasure Recommendations (FHWA CMFs)
+
+For each high-risk corridor, recommends proven safety countermeasures with a
+benefit-cost estimate. It infers the corridor's likely crash types from its
+roadway attributes, matches applicable FHWA Proven Safety Countermeasures, and
+values the crashes each would avoid (via its Crash Modification Factor) against
+the treatment cost.
+
+The curated CMF table is committed at
+[data/reference/countermeasures.json](data/reference/countermeasures.json)
+(schema in `countermeasures.md`).
+
+### Build the report (offline)
+
+```bash
+conda run -n playground python scripts/build_countermeasure_report.py --top-n 100 --analysis-years 5
+```
+
+Writes `data/reports/countermeasures.csv` and `.geojson` — one row per HIN
+segment with its best-benefit-cost treatment. The serving store reads the HIN
+parquet, configurable via `TRAFFIC_SAFETY_CM_SEGMENTS_PATH`.
+
+### Serve the analysis (`/v1/countermeasures`)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /v1/countermeasures/segment?segment_id=` | Ranked treatments for a segment, each with CMF + benefit-cost |
+| `GET /v1/countermeasures/hotspots` | Top crash-risk segments each with a recommended treatment (bbox, `min_fatal_crashes`; JSON or `?format=geojson`) |
+
+```bash
+# Ranked treatments for one HIN segment
+curl "http://127.0.0.1:8080/v1/countermeasures/segment?segment_id=<id>"
+
+# Hotspots in a bbox, each with a recommended treatment, as GeoJSON
+curl "http://127.0.0.1:8080/v1/countermeasures/hotspots?min_lat=33.9&max_lat=34.2&min_lon=-118.5&max_lon=-118.1&format=geojson"
+```
+
+The corridor-specific CMFs also drive the grant benefit-cost by default
+(`scripts/build_grant_dataset.py --benefit-cost-method cmf`, with `flat` as a
+fallback).
+
+### Methodology & disclaimers
+
+- **CMFs:** a CMF multiplies expected crashes (CMF < 1 reduces them); the crash
+  reduction factor is `CRF = 1 − CMF`. Stacked treatments combine with a
+  conservative diminishing-returns rule, not naive multiplication.
+- **Benefit-cost** values avoided crashes at the FHWA comprehensive fatal-crash
+  cost, discounted over the treatment service life.
+- Each recommendation carries a `cmf_confidence` (from the CMF Clearinghouse star
+  rating). Roadway context is inferred from MTFCC (urban assumed when unknown).
+- These are **representative screening values**, not project-specific CMFs, and
+  **not a substitute for an engineering study** before programming funds.
+
 ## Recommended Shape
 
 The most practical nationwide design is a two-layer system:
