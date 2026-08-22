@@ -1,14 +1,24 @@
-"""Regional Road Risk Advisory index from the climatological risk overlay.
+"""Regional Road Risk Advisory index — climatological and live.
 
-Samples the nationwide weekly risk cube (``OVERLAY["risk"]`` — a
-``(frames, height, width)`` grid) within a metro region's bounding box, reduces
-the sampled cells to a single representative risk score, then maps that score to
-a public advisory via :mod:`advisory`.
+Two ways to reduce a metro region to a single representative risk score and its
+public advisory (:mod:`advisory`):
 
-Pure and deterministic. The cube may be a numpy array or nested Python lists;
-the bbox→cell index math mirrors ``api_v1._sample_risk_grid`` so a region's index
-agrees with the heatmap it summarises. Everything degrades to an empty sample
-(risk 0.0, "Low") rather than raising on malformed cubes/coverage/regions.
+* **Climatological** (:func:`region_index`, :func:`index_all_regions`) — sample
+  the nationwide weekly risk cube (``OVERLAY["risk"]`` — a
+  ``(frames, height, width)`` grid) within the region's bounding box. The
+  bbox→cell index math mirrors ``api_v1._sample_risk_grid`` so a region's index
+  agrees with the heatmap it summarises.
+* **Live** (:func:`live_region_index`) — call an injected point predictor at a
+  small grid of representative interior points and aggregate the returned
+  scores. Per-point provider/network failures are counted, not fatal, so a
+  partial outage still yields a region reading.
+
+:func:`compare_to_normal` expresses a live score relative to its climatological
+baseline ("worse/better than normal").
+
+Pure and deterministic (the predictor is injected). Everything degrades to an
+empty sample (risk 0.0, "Low") rather than raising on malformed
+cubes/coverage/regions/predictions.
 """
 
 from __future__ import annotations
@@ -282,3 +292,148 @@ def index_all_regions(
             out.append(idx)
     out.sort(key=lambda r: r["risk_score"], reverse=True)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Live regional index (injected point predictor)
+# --------------------------------------------------------------------------- #
+
+DEFAULT_LIVE_GRID = (3, 3)
+
+
+def _clamp01(value) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(v):
+        return 0.0
+    return 0.0 if v < 0.0 else 1.0 if v > 1.0 else v
+
+
+def grid_sample_points(bbox, rows: int = 3, cols: int = 3) -> list[dict]:
+    """A ``rows`` x ``cols`` grid of interior sample points within ``bbox``.
+
+    Points sit at sub-cell centres (fractions ``(k + 0.5) / n``) so none land on
+    the bbox edges. Returns [] for a degenerate/malformed bbox.
+    """
+    try:
+        min_lat, max_lat, min_lon, max_lon = (float(x) for x in bbox)
+    except (TypeError, ValueError):
+        return []
+    try:
+        r = max(1, int(rows))
+        c = max(1, int(cols))
+    except (TypeError, ValueError):
+        r, c = 3, 3
+    if max_lat < min_lat or max_lon < min_lon:
+        return []
+    lat_span = max_lat - min_lat
+    lon_span = max_lon - min_lon
+    points: list[dict] = []
+    for i in range(r):
+        lat = min_lat + (i + 0.5) / r * lat_span
+        for j in range(c):
+            lon = min_lon + (j + 0.5) / c * lon_span
+            points.append({"lat": round(lat, 6), "lon": round(lon, 6)})
+    return points
+
+
+def _score_of(prediction):
+    """Extract a finite [0, 1] risk score from a predictor result, or None."""
+    value = prediction.get("risk_score") if isinstance(prediction, dict) else prediction
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(score):
+        return None
+    return _clamp01(score)
+
+
+def live_region_index(
+    predict,
+    region,
+    *,
+    rows: int = 3,
+    cols: int = 3,
+    statistic=DEFAULT_STATISTIC,
+    drivers=None,
+) -> dict | None:
+    """Live advisory index for a region from an injected point predictor.
+
+    ``predict`` is called as ``predict(lat, lon)`` per representative point and
+    must return a dict with a ``risk_score`` (or a bare number). Per-point
+    exceptions and non-numeric results are counted in ``failed_points`` rather
+    than propagated, so a partial provider outage still produces a reading;
+    ``status`` is ``"unavailable"`` (and ``advisory`` None) only when *every*
+    point failed. Returns None for an unknown region.
+    """
+    reg = region if isinstance(region, dict) else _regions.get_region(region)
+    if reg is None or "bbox" not in reg:
+        return None
+    bbox = _regions.region_bbox(reg)
+    points = grid_sample_points(bbox, rows=rows, cols=cols)
+
+    scores: list[float] = []
+    failed = 0
+    for point in points:
+        try:
+            prediction = predict(point["lat"], point["lon"])
+        except Exception:  # noqa: BLE001 - per-point provider/network faults are non-fatal
+            failed += 1
+            continue
+        score = _score_of(prediction)
+        if score is None:
+            failed += 1
+            continue
+        scores.append(score)
+
+    available = bool(scores)
+    score = _reduce(scores, statistic) if available else 0.0
+    return {
+        "region_id": reg.get("id"),
+        "region_name": reg.get("name"),
+        "bbox": list(bbox),
+        "mode": "live",
+        "status": "ok" if available else "unavailable",
+        "statistic": str(statistic),
+        "sample_points": len(points),
+        "sample_count": len(scores),
+        "failed_points": failed,
+        "risk_score": round(score, 4),
+        "risk_mean": round(_reduce(scores, "mean"), 4),
+        "risk_max": round(_reduce(scores, "max"), 4),
+        "risk_p90": round(_reduce(scores, "p90"), 4),
+        "advisory": advisory.advisory(score, drivers=drivers) if available else None,
+    }
+
+
+def compare_to_normal(now_score, normal_score, *, tolerance: float = 0.05) -> dict:
+    """Express a current score relative to its climatological baseline.
+
+    ``comparison`` is "worse than normal" / "better than normal" when the scores
+    differ by more than ``tolerance``, else "about normal". ``ratio`` is None
+    when the baseline is zero (undefined).
+    """
+    now = _clamp01(now_score)
+    normal = _clamp01(normal_score)
+    delta = now - normal
+    try:
+        band = abs(float(tolerance))
+    except (TypeError, ValueError):
+        band = 0.05
+    if abs(delta) <= band:
+        comparison = "about normal"
+    elif delta > 0:
+        comparison = "worse than normal"
+    else:
+        comparison = "better than normal"
+    ratio = round(now / normal, 3) if normal > 0.0 else None
+    return {
+        "now": round(now, 4),
+        "normal": round(normal, 4),
+        "delta": round(delta, 4),
+        "ratio": ratio,
+        "comparison": comparison,
+    }

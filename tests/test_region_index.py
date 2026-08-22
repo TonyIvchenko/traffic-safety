@@ -120,3 +120,93 @@ def test_bad_frame_idx_and_bad_inputs_do_not_raise():
     assert region_index.region_risk_score(None, COVERAGE, BBOX_MID) == 0.0
     # Out-of-range frame clamps into the cube rather than erroring.
     assert region_index.region_risk_score(_cube(), COVERAGE, BBOX_MID, frame_idx=999) > 0.0
+
+
+# --------------------------------------------------------------------------- #
+# Live regional index
+# --------------------------------------------------------------------------- #
+
+
+def test_grid_sample_points_interior():
+    points = region_index.grid_sample_points([2.0, 4.0, 2.0, 4.0], rows=3, cols=3)
+    assert len(points) == 9
+    # Every point strictly inside the bbox (no edge points).
+    for p in points:
+        assert 2.0 < p["lat"] < 4.0 and 2.0 < p["lon"] < 4.0
+    # Centre of a 3x3 grid is the bbox centre.
+    assert points[4] == {"lat": 3.0, "lon": 3.0}
+
+
+def test_grid_sample_points_degenerate_bbox():
+    assert region_index.grid_sample_points([4.0, 2.0, 2.0, 4.0]) == []  # min_lat > max_lat
+    assert region_index.grid_sample_points("nope") == []
+
+
+def _fixed_predictor(score):
+    def predict(lat, lon):
+        return {"risk_score": score, "cell_id": f"{lat:.2f},{lon:.2f}"}
+
+    return predict
+
+
+def test_live_region_index_aggregates():
+    region = {"id": "mid", "name": "Mid", "bbox": [2.0, 4.0, 2.0, 4.0]}
+    idx = region_index.live_region_index(_fixed_predictor(0.42), region, rows=3, cols=3)
+    assert idx["mode"] == "live" and idx["status"] == "ok"
+    assert idx["sample_points"] == 9 and idx["sample_count"] == 9 and idx["failed_points"] == 0
+    assert idx["risk_score"] == pytest.approx(0.42)
+    assert idx["advisory"]["level"] == "High"  # 0.42 in [0.35, 0.50)
+
+
+def test_live_region_index_accepts_bare_number_and_clamps():
+    region = {"id": "x", "name": "X", "bbox": [2.0, 4.0, 2.0, 4.0]}
+
+    def predict(lat, lon):
+        return 5.0  # out of range -> clamped to 1.0
+
+    idx = region_index.live_region_index(predict, region)
+    assert idx["risk_score"] == 1.0
+    assert idx["advisory"]["level"] == "Extreme"
+
+
+def test_live_region_index_counts_partial_failures():
+    region = {"id": "x", "name": "X", "bbox": [2.0, 4.0, 2.0, 4.0]}
+    calls = {"n": 0}
+
+    def flaky(lat, lon):
+        calls["n"] += 1
+        if calls["n"] % 2 == 0:
+            raise RuntimeError("provider hiccup")
+        return {"risk_score": 0.3}
+
+    idx = region_index.live_region_index(flaky, region, rows=3, cols=3)
+    assert idx["status"] == "ok"
+    assert idx["sample_count"] + idx["failed_points"] == 9
+    assert idx["failed_points"] > 0
+
+
+def test_live_region_index_unavailable_when_all_fail():
+    region = {"id": "x", "name": "X", "bbox": [2.0, 4.0, 2.0, 4.0]}
+
+    def down(lat, lon):
+        raise RuntimeError("provider down")
+
+    idx = region_index.live_region_index(down, region)
+    assert idx["status"] == "unavailable"
+    assert idx["sample_count"] == 0
+    assert idx["advisory"] is None
+    assert idx["risk_score"] == 0.0
+
+
+def test_live_region_index_unknown_region_is_none():
+    assert region_index.live_region_index(_fixed_predictor(0.2), "atlantis") is None
+
+
+def test_compare_to_normal_branches():
+    assert region_index.compare_to_normal(0.5, 0.2)["comparison"] == "worse than normal"
+    assert region_index.compare_to_normal(0.2, 0.5)["comparison"] == "better than normal"
+    assert region_index.compare_to_normal(0.30, 0.32)["comparison"] == "about normal"
+    worse = region_index.compare_to_normal(0.5, 0.25)
+    assert worse["delta"] == pytest.approx(0.25) and worse["ratio"] == pytest.approx(2.0)
+    # Zero baseline -> ratio undefined (None), not a division error.
+    assert region_index.compare_to_normal(0.4, 0.0)["ratio"] is None
