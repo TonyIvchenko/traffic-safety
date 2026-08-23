@@ -18,8 +18,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 import requests
 
+import advisory
 import grant_html
 from live_weather import LiveWeatherProviderError
+import region_index
 from segment_support import coords_from_json
 import risk_eval
 import segment_runtime
@@ -350,6 +352,29 @@ def _annotate_route_glare(steps: list[dict], glare_datetime: str | None) -> int 
         if assessment["glare"]:
             glare_count += 1
     return glare_count
+
+
+_HAZARD_DRIVER_PHRASES = {
+    "ice": "icy roads",
+    "fog": "reduced visibility (fog)",
+    "wet": "wet roads",
+}
+
+
+def _advisory_drivers(result) -> list[str]:
+    """Human-readable advisory drivers from a prediction's hazard labels."""
+    if not isinstance(result, dict):
+        return []
+    hazards = result.get("hazards")
+    labels = hazards.get("labels") if isinstance(hazards, dict) else None
+    if not isinstance(labels, list):
+        return []
+    drivers: list[str] = []
+    for label in labels:
+        text = str(label).strip()
+        if text:
+            drivers.append(_HAZARD_DRIVER_PHRASES.get(text, text))
+    return drivers
 
 
 def _sample_risk_grid(cube, coverage: dict, frame_idx: int, bbox, max_cells: int, min_risk: float) -> list[dict]:
@@ -793,6 +818,79 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         if explain:
             result = {**result, "explanation": deps.explain_point(result)}
         return result
+
+    @router.get(
+        "/advisory/point",
+        summary="Road Risk Advisory ('AQI for driving') for a single point",
+    )
+    def advisory_point(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+        mode: str = Query("climatology", description="'climatology' or 'live'"),
+        day_of_week: int = Query(1, ge=1, le=7, description="Monday=1..Sunday=7 (climatology)"),
+        hour: int = Query(0, ge=0, le=23, description="local hour 0-23 (climatology)"),
+        month: int = Query(1, ge=1, le=12, description="month 1-12 (climatology)"),
+        forecast_hours: int = Query(0, ge=0, le=48, description="hours ahead (live)"),
+        provider: str = Query("auto", description="live weather provider (live)"),
+        compare: bool = Query(
+            False, description="include a normal-vs-now comparison (live mode only)"
+        ),
+    ) -> dict:
+        mode_norm = mode.strip().lower()
+        if mode_norm not in {"climatology", "live"}:
+            raise HTTPException(status_code=422, detail="mode must be 'climatology' or 'live'")
+
+        if mode_norm == "live":
+            _validate_provider(provider)
+            response.headers["Cache-Control"] = "no-store"
+            try:
+                result = deps.predict_point_live(
+                    lat=lat, lon=lon, forecast_hours=forecast_hours, provider=provider
+                )
+            except LiveWeatherProviderError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except requests.RequestException as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"weather provider request failed: {exc}"
+                ) from exc
+        else:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+            result = deps.predict_point(
+                lat=lat, lon=lon, day_of_week=day_of_week, hour=hour, month=month
+            )
+
+        score = _safe_float(result.get("risk_score")) or 0.0
+        drivers = _advisory_drivers(result)
+        advisory_block = advisory.advisory(score, drivers=drivers)
+
+        payload = {
+            "lat": float(lat),
+            "lon": float(lon),
+            "mode": mode_norm,
+            "cell_id": result.get("cell_id"),
+            "in_coverage": bool(result.get("in_coverage", False)),
+            "risk_score": advisory_block["risk_score"],
+            "advisory": advisory_block,
+            "weather": result.get("weather"),
+            "weather_source": result.get("weather_source"),
+            "hazards": result.get("hazards"),
+        }
+
+        # A normal-vs-now comparison only means something in live mode: compare the
+        # live score against the climatological baseline for the same place/time.
+        if compare and mode_norm == "live":
+            normal = deps.predict_point(
+                lat=lat,
+                lon=lon,
+                day_of_week=int(result.get("local_day_of_week", day_of_week)),
+                hour=int(result.get("local_hour", hour)),
+                month=int(result.get("month", month)),
+            )
+            normal_score = _safe_float(normal.get("risk_score")) or 0.0
+            payload["compared_to_normal"] = region_index.compare_to_normal(score, normal_score)
+
+        return payload
 
     @router.get(
         "/hazards/sun-glare",

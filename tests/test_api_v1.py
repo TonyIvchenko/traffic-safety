@@ -126,6 +126,76 @@ def test_v1_point_rejects_bad_mode_and_coords():
     assert client.get("/v1/risk/point?lat=120&lon=-118").status_code == 422
 
 
+def test_v1_advisory_point_climatology():
+    client = TestClient(MODULE.api)
+    response = client.get(
+        "/v1/advisory/point?lat=34.0522&lon=-118.2437&day_of_week=5&hour=17&month=9"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "climatology"
+    adv = payload["advisory"]
+    assert adv["level"] in {"Low", "Moderate", "Elevated", "High", "Extreme"}
+    assert adv["level_index"] in {1, 2, 3, 4, 5}
+    assert adv["color"].startswith("#")
+    assert adv["message"].startswith(adv["level"])
+    assert payload["risk_score"] == adv["risk_score"]
+    assert "compared_to_normal" not in payload  # climatology has no now-vs-normal
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_v1_advisory_point_rejects_bad_mode():
+    client = TestClient(MODULE.api)
+    assert (
+        client.get("/v1/advisory/point?lat=34&lon=-118&mode=weird").status_code == 422
+    )
+
+
+def test_v1_advisory_point_live_folds_hazards_and_compares(monkeypatch):
+    snapshot = SimpleNamespace(
+        provider="nws",
+        provider_label="NWS",
+        observed_or_forecast="observation",
+        timestamp_local=datetime(2024, 9, 6, 17, 0, tzinfo=timezone.utc),
+        forecast_hours=0,
+        temp_c=12.0,
+        dewpoint_c=11.0,
+        relative_humidity_pct=97.0,
+        wind_speed_mps=3.0,
+        wet_hour=1.0,  # -> "wet" hazard label -> "wet roads" advisory driver
+        summary="Rain",
+    )
+
+    import predict
+
+    monkeypatch.setattr(predict, "fetch_live_weather", lambda **kwargs: snapshot)
+    client = TestClient(MODULE.api)
+    response = client.get(
+        "/v1/advisory/point?lat=34.0522&lon=-118.2437&mode=live&compare=true"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "live"
+    assert payload["weather_source"] == "live_observation"
+    assert "wet roads" in payload["advisory"]["drivers"]
+    comparison = payload["compared_to_normal"]
+    assert comparison["comparison"] in {
+        "worse than normal",
+        "about normal",
+        "better than normal",
+    }
+    assert 0.0 <= comparison["now"] <= 1.0 and 0.0 <= comparison["normal"] <= 1.0
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_v1_advisory_point_live_rejects_unknown_provider():
+    client = TestClient(MODULE.api)
+    response = client.get(
+        "/v1/advisory/point?lat=34.0522&lon=-118.2437&mode=live&provider=bogus"
+    )
+    assert response.status_code == 400
+
+
 def test_v1_meta_includes_model_metrics():
     client = TestClient(MODULE.api)
     payload = client.get("/v1/meta").json()
