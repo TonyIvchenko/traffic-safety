@@ -196,6 +196,112 @@ def test_v1_advisory_point_live_rejects_unknown_provider():
     assert response.status_code == 400
 
 
+def test_v1_advisory_region_by_id():
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/advisory/region?region=los_angeles&day_of_week=5&hour=17")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["region_id"] == "los_angeles"
+    assert payload["mode"] == "climatology"
+    assert payload["resolved_by"] == "id"
+    assert payload["frame_idx"] == (5 - 1) * 24 + 17
+    assert payload["advisory"]["level"] in {
+        "Low", "Moderate", "Elevated", "High", "Extreme"
+    }
+    assert payload["sample_count"] >= 0
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_v1_advisory_region_by_point():
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/advisory/region?lat=34.0522&lon=-118.2437")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["region_id"] == "los_angeles"
+    assert payload["resolved_by"] == "point"
+
+
+def test_v1_advisory_region_requires_selector():
+    client = TestClient(MODULE.api)
+    assert client.get("/v1/advisory/region").status_code == 422
+
+
+def test_v1_advisory_region_blank_region_falls_back_to_point():
+    client = TestClient(MODULE.api)
+    # A blank region param must not shadow valid point resolution.
+    response = client.get("/v1/advisory/region?region=&lat=34.0522&lon=-118.2437")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["region_id"] == "los_angeles"
+    assert payload["resolved_by"] == "point"
+
+
+def test_v1_advisory_region_unknown_id():
+    client = TestClient(MODULE.api)
+    assert client.get("/v1/advisory/region?region=atlantis").status_code == 404
+
+
+def test_v1_advisory_region_point_outside_all_regions():
+    client = TestClient(MODULE.api)
+    # Gulf of Guinea: not inside any metro bbox.
+    assert client.get("/v1/advisory/region?lat=0&lon=0").status_code == 404
+
+
+def test_v1_advisory_region_live_and_compare(monkeypatch):
+    snapshot = SimpleNamespace(
+        provider="nws",
+        provider_label="NWS",
+        observed_or_forecast="observation",
+        timestamp_local=datetime(2024, 9, 6, 17, 0, tzinfo=timezone.utc),
+        forecast_hours=0,
+        temp_c=20.0,
+        dewpoint_c=12.0,
+        relative_humidity_pct=60.0,
+        wind_speed_mps=4.0,
+        wet_hour=0.0,
+        summary="Clear",
+    )
+
+    import predict
+
+    monkeypatch.setattr(predict, "fetch_live_weather", lambda **kwargs: snapshot)
+    client = TestClient(MODULE.api)
+    # Deliberately omit day_of_week/hour: the compare baseline must align to the
+    # live time-of-week (the snapshot is Fri 2024-09-06 17:00 -> frame 4*24+17).
+    response = client.get(
+        "/v1/advisory/region?region=los_angeles&mode=live&compare=true"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "live"
+    assert payload["status"] == "ok"
+    assert payload["sample_count"] == 9  # 3x3 representative grid
+    assert payload["advisory"]["level"] in {
+        "Low", "Moderate", "Elevated", "High", "Extreme"
+    }
+    assert payload["compared_to_normal"]["comparison"] in {
+        "worse than normal", "about normal", "better than normal"
+    }
+    # Baseline aligned to now (Fri 17:00), NOT the default Monday 00:00 frame.
+    assert payload["baseline_frame_idx"] == (5 - 1) * 24 + 17
+    assert payload["baseline_frame_label"] == "Fri 17:00"
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_v1_advisory_region_live_unavailable(monkeypatch):
+    from live_weather import LiveWeatherProviderError
+
+    def boom(**kwargs):
+        raise LiveWeatherProviderError("provider down")
+
+    import predict
+
+    monkeypatch.setattr(predict, "fetch_live_weather", boom)
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/advisory/region?region=los_angeles&mode=live")
+    assert response.status_code == 503
+
+
 def test_v1_meta_includes_model_metrics():
     client = TestClient(MODULE.api)
     payload = client.get("/v1/meta").json()

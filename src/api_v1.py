@@ -22,6 +22,7 @@ import advisory
 import grant_html
 from live_weather import LiveWeatherProviderError
 import region_index
+import regions
 from segment_support import coords_from_json
 import risk_eval
 import segment_runtime
@@ -890,6 +891,107 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             normal_score = _safe_float(normal.get("risk_score")) or 0.0
             payload["compared_to_normal"] = region_index.compare_to_normal(score, normal_score)
 
+        return payload
+
+    @router.get(
+        "/advisory/region",
+        summary="Road Risk Advisory for a metro region (by id or containing point)",
+    )
+    def advisory_region(
+        response: Response,
+        region: str | None = Query(None, description="region id (see /v1/meta)"),
+        lat: float | None = Query(None, ge=-90.0, le=90.0, description="resolve region by point"),
+        lon: float | None = Query(None, ge=-180.0, le=180.0, description="resolve region by point"),
+        mode: str = Query("climatology", description="'climatology' or 'live'"),
+        day_of_week: int = Query(1, ge=1, le=7, description="Monday=1..Sunday=7"),
+        hour: int = Query(0, ge=0, le=23, description="local hour 0-23"),
+        provider: str = Query("auto", description="live weather provider (live)"),
+        forecast_hours: int = Query(0, ge=0, le=48, description="hours ahead (live)"),
+        compare: bool = Query(
+            False, description="include a normal-vs-now comparison (live mode only)"
+        ),
+    ) -> dict:
+        mode_norm = mode.strip().lower()
+        if mode_norm not in {"climatology", "live"}:
+            raise HTTPException(status_code=422, detail="mode must be 'climatology' or 'live'")
+
+        # Resolve the region: an explicit id wins, else the containing region for a
+        # point. A blank/whitespace region param counts as "not supplied" so it does
+        # not shadow lat/lon resolution.
+        if region is not None and region.strip():
+            resolved = regions.get_region(region)
+            resolved_by = "id"
+            if resolved is None:
+                raise HTTPException(status_code=404, detail=f"unknown region: {region}")
+        elif lat is not None and lon is not None:
+            resolved = regions.region_for_point(lat, lon)
+            resolved_by = "point"
+            if resolved is None:
+                raise HTTPException(
+                    status_code=404, detail="no metro region covers that point"
+                )
+        else:
+            raise HTTPException(
+                status_code=422, detail="provide a region id or both lat and lon"
+            )
+
+        def _frame_label(idx: int) -> str:
+            return deps.frame_labels[idx] if 0 <= idx < len(deps.frame_labels) else str(idx)
+
+        requested_frame_idx = (day_of_week - 1) * 24 + hour
+
+        if mode_norm == "climatology":
+            response.headers["Cache-Control"] = "public, max-age=3600"
+            index = region_index.region_index(
+                deps.risk_cube, deps.coverage, resolved, frame_idx=requested_frame_idx
+            )
+            return {
+                **index,
+                "mode": "climatology",
+                "resolved_by": resolved_by,
+                "frame_idx": requested_frame_idx,
+                "frame_label": _frame_label(requested_frame_idx),
+            }
+
+        # Live: sample the live predictor across the region's representative points.
+        _validate_provider(provider)
+        response.headers["Cache-Control"] = "no-store"
+
+        # Capture the live time-of-week from the first successful prediction so a
+        # normal-vs-now comparison aligns the climatological baseline to *now*
+        # (as /v1/advisory/point does), not to the request's day_of_week/hour —
+        # which are otherwise irrelevant in live mode.
+        captured: dict = {}
+
+        def _predict(point_lat, point_lon):
+            result = deps.predict_point_live(
+                lat=point_lat, lon=point_lon, forecast_hours=forecast_hours, provider=provider
+            )
+            if "frame_idx" not in captured and isinstance(result, dict):
+                dow = result.get("local_day_of_week")
+                hr = result.get("local_hour")
+                if isinstance(dow, int) and isinstance(hr, int):
+                    captured["frame_idx"] = (dow - 1) * 24 + hr
+            return result
+
+        index = region_index.live_region_index(_predict, resolved)
+        if index["status"] == "unavailable":
+            raise HTTPException(
+                status_code=503,
+                detail="live weather unavailable for every sampled point in this region",
+            )
+
+        payload = {**index, "resolved_by": resolved_by}
+        if compare:
+            baseline_frame_idx = captured.get("frame_idx", requested_frame_idx)
+            baseline = region_index.region_index(
+                deps.risk_cube, deps.coverage, resolved, frame_idx=baseline_frame_idx
+            )
+            payload["compared_to_normal"] = region_index.compare_to_normal(
+                index["risk_score"], baseline["risk_score"]
+            )
+            payload["baseline_frame_idx"] = baseline_frame_idx
+            payload["baseline_frame_label"] = _frame_label(baseline_frame_idx)
         return payload
 
     @router.get(
