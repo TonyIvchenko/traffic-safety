@@ -378,6 +378,52 @@ def _advisory_drivers(result) -> list[str]:
     return drivers
 
 
+def _advisory_national_geojson(regions_indexed: list[dict], geometry_kind: str) -> dict:
+    """FeatureCollection of per-region advisories (centroid points or bbox polygons)."""
+    features = []
+    for entry in regions_indexed:
+        bbox = entry.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        try:
+            min_lat, max_lat, min_lon, max_lon = (float(x) for x in bbox)
+        except (TypeError, ValueError):
+            continue
+        advisory_block = entry.get("advisory") or {}
+        properties = {
+            "region_id": entry.get("region_id"),
+            "region_name": entry.get("region_name"),
+            "risk_score": entry.get("risk_score"),
+            "level": advisory_block.get("level"),
+            "level_index": advisory_block.get("level_index"),
+            "color": advisory_block.get("color"),
+            "advice": advisory_block.get("advice"),
+        }
+        if geometry_kind == "bbox":
+            geometry = {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [min_lon, min_lat],
+                        [max_lon, min_lat],
+                        [max_lon, max_lat],
+                        [min_lon, max_lat],
+                        [min_lon, min_lat],
+                    ]
+                ],
+            }
+        else:
+            geometry = {
+                "type": "Point",
+                "coordinates": [
+                    round((min_lon + max_lon) / 2.0, 6),
+                    round((min_lat + max_lat) / 2.0, 6),
+                ],
+            }
+        features.append({"type": "Feature", "geometry": geometry, "properties": properties})
+    return {"type": "FeatureCollection", "features": features}
+
+
 def _sample_risk_grid(cube, coverage: dict, frame_idx: int, bbox, max_cells: int, min_risk: float) -> list[dict]:
     """Sample the climatological risk grid for a frame within a bbox (bounded)."""
     frames = len(cube)
@@ -993,6 +1039,66 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             payload["baseline_frame_idx"] = baseline_frame_idx
             payload["baseline_frame_label"] = _frame_label(baseline_frame_idx)
         return payload
+
+    @router.get(
+        "/advisory/national",
+        response_model=None,
+        summary="Nationwide Road Risk Advisory across all metro regions (JSON or GeoJSON)",
+    )
+    def advisory_national(
+        response: Response,
+        day_of_week: int = Query(1, ge=1, le=7, description="Monday=1..Sunday=7"),
+        hour: int = Query(0, ge=0, le=23, description="local hour 0-23"),
+        min_level: int = Query(
+            1, ge=1, le=5, description="only regions at/above this advisory level index (1-5)"
+        ),
+        output_format: str = Query("json", alias="format", description="'json' or 'geojson'"),
+        geometry: str = Query(
+            "point", description="geojson geometry: 'point' (centroid) or 'bbox' (polygon)"
+        ),
+    ):
+        fmt = output_format.strip().lower()
+        if fmt not in {"json", "geojson"}:
+            raise HTTPException(status_code=422, detail="format must be 'json' or 'geojson'")
+        geom = geometry.strip().lower()
+        if geom not in {"point", "bbox"}:
+            raise HTTPException(status_code=422, detail="geometry must be 'point' or 'bbox'")
+
+        frame_idx = (day_of_week - 1) * 24 + hour
+        frame_label = (
+            deps.frame_labels[frame_idx]
+            if 0 <= frame_idx < len(deps.frame_labels)
+            else str(frame_idx)
+        )
+        indexed = region_index.index_all_regions(
+            deps.risk_cube, deps.coverage, frame_idx=frame_idx
+        )
+        if min_level > 1:
+            indexed = [
+                entry
+                for entry in indexed
+                if (entry.get("advisory") or {}).get("level_index", 1) >= min_level
+            ]
+
+        if fmt == "geojson":
+            payload = _advisory_national_geojson(indexed, geom)
+            payload["mode"] = "climatology"
+            payload["frame_idx"] = frame_idx
+            payload["frame_label"] = frame_label
+            return JSONResponse(
+                content=payload,
+                media_type="application/geo+json",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        return {
+            "mode": "climatology",
+            "frame_idx": frame_idx,
+            "frame_label": frame_label,
+            "count": len(indexed),
+            "regions": indexed,
+        }
 
     @router.get(
         "/hazards/sun-glare",

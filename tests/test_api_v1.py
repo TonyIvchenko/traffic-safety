@@ -302,6 +302,61 @@ def test_v1_advisory_region_live_unavailable(monkeypatch):
     assert response.status_code == 503
 
 
+def test_v1_advisory_national_json():
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/advisory/national?day_of_week=5&hour=17")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "climatology"
+    assert payload["frame_idx"] == (5 - 1) * 24 + 17
+    assert payload["count"] == len(payload["regions"])
+    assert payload["count"] >= 15
+    # Sorted by risk score, highest first.
+    scores = [r["risk_score"] for r in payload["regions"]]
+    assert scores == sorted(scores, reverse=True)
+    first = payload["regions"][0]
+    assert {"region_id", "region_name", "risk_score", "advisory"} <= set(first)
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_v1_advisory_national_geojson_point_and_bbox():
+    client = TestClient(MODULE.api)
+    point = client.get("/v1/advisory/national?format=geojson").json()
+    assert point["type"] == "FeatureCollection"
+    assert point["features"]
+    feat = point["features"][0]
+    assert feat["geometry"]["type"] == "Point"
+    assert len(feat["geometry"]["coordinates"]) == 2
+    assert {"region_id", "level", "color", "risk_score"} <= set(feat["properties"])
+
+    poly = client.get("/v1/advisory/national?format=geojson&geometry=bbox").json()
+    poly_feat = poly["features"][0]
+    assert poly_feat["geometry"]["type"] == "Polygon"
+    ring = poly_feat["geometry"]["coordinates"][0]
+    assert len(ring) == 5 and ring[0] == ring[-1]  # closed ring
+
+
+def test_v1_advisory_national_geojson_media_type():
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/advisory/national?format=geojson")
+    assert response.headers["content-type"].startswith("application/geo+json")
+
+
+def test_v1_advisory_national_min_level_filter():
+    client = TestClient(MODULE.api)
+    full = client.get("/v1/advisory/national?min_level=1").json()
+    filtered = client.get("/v1/advisory/national?min_level=4").json()
+    # Filtering never grows the set, and every survivor meets the threshold.
+    assert filtered["count"] <= full["count"]
+    assert all(r["advisory"]["level_index"] >= 4 for r in filtered["regions"])
+
+
+def test_v1_advisory_national_rejects_bad_format_and_geometry():
+    client = TestClient(MODULE.api)
+    assert client.get("/v1/advisory/national?format=xml").status_code == 422
+    assert client.get("/v1/advisory/national?format=geojson&geometry=blob").status_code == 422
+
+
 def test_v1_meta_includes_model_metrics():
     client = TestClient(MODULE.api)
     payload = client.get("/v1/meta").json()
