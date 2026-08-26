@@ -16,6 +16,13 @@ public advisory (:mod:`advisory`):
 :func:`compare_to_normal` expresses a live score relative to its climatological
 baseline ("worse/better than normal").
 
+* **Relative** (:func:`cell_relative_advisory`, :func:`region_relative_advisory`)
+  — build a location's 168-hour weekly climatology from the *raw model* (an
+  injected ``predict(lat, lon, day_of_week, hour, month)``) and express a current
+  score as its percentile within that week. The overlay cube is normalised/clipped
+  and near-saturated in metros, so it cannot supply a discriminating reference;
+  the raw model retains the weekly variation, hence the separate predictor here.
+
 Pure and deterministic (the predictor is injected). Everything degrades to an
 empty sample (risk 0.0, "Low") rather than raising on malformed
 cubes/coverage/regions/predictions.
@@ -437,3 +444,132 @@ def compare_to_normal(now_score, normal_score, *, tolerance: float = 0.05) -> di
         "ratio": ratio,
         "comparison": comparison,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Relative advisory: raw-model weekly climatology as the reference distribution
+# --------------------------------------------------------------------------- #
+
+WEEKLY_FRAMES = 168  # 24 hours x 7 days
+
+
+def cell_weekly_profile(predict, lat, lon, *, month: int = 1) -> list[float]:
+    """The 168 climatological risk scores at a point, one per hour-of-week.
+
+    ``predict`` is an injected point predictor called as
+    ``predict(lat, lon, day_of_week, hour, month)`` (day_of_week 1-7, hour 0-23).
+    A frame whose prediction fails or is non-numeric contributes 0.0 so the list
+    stays index-aligned with the hour-of-week. This raw-model profile — not the
+    clipped overlay cube — is the discriminating reference for a relative advisory.
+    """
+    profile: list[float] = []
+    for hour_of_week in range(WEEKLY_FRAMES):
+        try:
+            result = predict(lat, lon, hour_of_week // 24 + 1, hour_of_week % 24, month)
+        except Exception:  # noqa: BLE001 - a single bad frame must not sink the profile
+            profile.append(0.0)
+            continue
+        score = _score_of(result)
+        profile.append(score if score is not None else 0.0)
+    return profile
+
+
+def region_weekly_profile(
+    predict,
+    region,
+    *,
+    rows: int = 3,
+    cols: int = 3,
+    month: int = 1,
+    statistic=DEFAULT_STATISTIC,
+) -> list[float]:
+    """A representative region score per hour-of-week from the raw model.
+
+    For each of the 168 frames, ``predict`` is evaluated at the region's
+    representative interior grid and reduced by ``statistic`` (default p90).
+    ``region`` may be a region dict or id; returns [] for an unknown region.
+    """
+    reg = region if isinstance(region, dict) else _regions.get_region(region)
+    if reg is None or "bbox" not in reg:
+        return []
+    bbox = _regions.region_bbox(reg)
+    points = grid_sample_points(bbox, rows=rows, cols=cols)
+    if not points:
+        return []
+    profile: list[float] = []
+    for hour_of_week in range(WEEKLY_FRAMES):
+        day_of_week = hour_of_week // 24 + 1
+        hour = hour_of_week % 24
+        scores: list[float] = []
+        for point in points:
+            try:
+                result = predict(point["lat"], point["lon"], day_of_week, hour, month)
+            except Exception:  # noqa: BLE001 - per-point faults are non-fatal
+                continue
+            score = _score_of(result)
+            if score is not None:
+                scores.append(score)
+        profile.append(_reduce(scores, statistic) if scores else 0.0)
+    return profile
+
+
+def cell_relative_advisory(
+    predict,
+    lat,
+    lon,
+    *,
+    day_of_week: int,
+    hour: int,
+    month: int = 1,
+    value=None,
+    drivers=None,
+) -> dict:
+    """Relative advisory for a point: current score vs its own weekly climatology.
+
+    ``value`` overrides the compared score (pass the live score in live mode);
+    when None the climatological score at ``day_of_week``/``hour`` is used.
+    """
+    profile = cell_weekly_profile(predict, lat, lon, month=month)
+    frame_idx = (day_of_week - 1) * 24 + hour
+    if value is None:
+        value = profile[frame_idx] if 0 <= frame_idx < len(profile) else 0.0
+    result = advisory.relative_advisory(value, profile, drivers=drivers)
+    result["frame_idx"] = frame_idx
+    result["reference_size"] = len(profile)
+    return result
+
+
+def region_relative_advisory(
+    predict,
+    region,
+    *,
+    day_of_week: int,
+    hour: int,
+    month: int = 1,
+    value=None,
+    drivers=None,
+    rows: int = 3,
+    cols: int = 3,
+    statistic=DEFAULT_STATISTIC,
+) -> dict | None:
+    """Relative advisory for a region: current aggregate vs its weekly climatology.
+
+    ``value`` overrides the compared score (pass the live region aggregate in live
+    mode); when None the climatological aggregate at ``day_of_week``/``hour`` is
+    used. Returns None for an unknown region.
+    """
+    reg = region if isinstance(region, dict) else _regions.get_region(region)
+    if reg is None or "bbox" not in reg:
+        return None
+    profile = region_weekly_profile(
+        predict, reg, rows=rows, cols=cols, month=month, statistic=statistic
+    )
+    frame_idx = (day_of_week - 1) * 24 + hour
+    if value is None:
+        value = profile[frame_idx] if 0 <= frame_idx < len(profile) else 0.0
+    result = advisory.relative_advisory(value, profile, drivers=drivers)
+    result["region_id"] = reg.get("id")
+    result["region_name"] = reg.get("name")
+    result["frame_idx"] = frame_idx
+    result["reference_size"] = len(profile)
+    return result

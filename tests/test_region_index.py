@@ -210,3 +210,86 @@ def test_compare_to_normal_branches():
     assert worse["delta"] == pytest.approx(0.25) and worse["ratio"] == pytest.approx(2.0)
     # Zero baseline -> ratio undefined (None), not a division error.
     assert region_index.compare_to_normal(0.4, 0.0)["ratio"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Relative advisory (raw-model weekly reference)
+# --------------------------------------------------------------------------- #
+
+
+def _rising_predict(lat, lon, day_of_week, hour, month):
+    # A score that rises strictly across the week, independent of location, so the
+    # weekly profile is a known increasing distribution.
+    how = (day_of_week - 1) * 24 + hour
+    return {"risk_score": 0.20 + how / 1000.0}
+
+
+def test_cell_weekly_profile_shape_and_order():
+    profile = region_index.cell_weekly_profile(_rising_predict, 34.0, -118.0)
+    assert len(profile) == 168
+    assert profile[0] == pytest.approx(0.20)
+    assert profile[167] == pytest.approx(0.20 + 167 / 1000.0)
+    assert profile == sorted(profile)  # strictly rising
+
+
+def test_cell_relative_advisory_climatology():
+    # Peak of the week reads Extreme; trough reads Low, both relative to self.
+    peak = region_index.cell_relative_advisory(
+        _rising_predict, 34.0, -118.0, day_of_week=7, hour=23
+    )
+    assert peak["level"] == "Extreme"
+    assert peak["basis"] == "relative_to_local_weekly_normal"
+    assert peak["frame_idx"] == 167 and peak["reference_size"] == 168
+    trough = region_index.cell_relative_advisory(
+        _rising_predict, 34.0, -118.0, day_of_week=1, hour=0
+    )
+    assert trough["level"] == "Low"
+
+
+def test_cell_relative_advisory_live_value_override():
+    # A live score above the whole weekly range -> top percentile -> Extreme.
+    result = region_index.cell_relative_advisory(
+        _rising_predict, 34.0, -118.0, day_of_week=1, hour=0, value=0.95
+    )
+    assert result["percentile"] == pytest.approx(1.0)
+    assert result["level"] == "Extreme"
+
+
+def test_region_weekly_profile_shape():
+    region = {"id": "mid", "name": "Mid", "bbox": [2.0, 4.0, 2.0, 4.0]}
+    profile = region_index.region_weekly_profile(_rising_predict, region)
+    assert len(profile) == 168
+    # p90 over identical points equals the per-frame score.
+    assert profile[0] == pytest.approx(0.20)
+    assert profile[167] == pytest.approx(0.20 + 167 / 1000.0)
+
+
+def test_region_relative_advisory_by_id_and_override():
+    idx = region_index.region_relative_advisory(
+        _rising_predict, "los_angeles", day_of_week=7, hour=23
+    )
+    assert idx["region_id"] == "los_angeles"
+    assert idx["level"] == "Extreme"
+    assert idx["reference_size"] == 168
+    # Live override below the weekly range -> Low.
+    low = region_index.region_relative_advisory(
+        _rising_predict, "los_angeles", day_of_week=7, hour=23, value=0.0
+    )
+    assert low["level"] == "Low"
+
+
+def test_region_relative_advisory_unknown_region_is_none():
+    assert region_index.region_relative_advisory(
+        _rising_predict, "atlantis", day_of_week=1, hour=0
+    ) is None
+
+
+def test_weekly_profile_tolerates_failing_predict():
+    def flaky(lat, lon, dow, hour, month):
+        if hour == 3:
+            raise RuntimeError("boom")
+        return {"risk_score": 0.3}
+
+    profile = region_index.cell_weekly_profile(flaky, 0.0, 0.0)
+    assert len(profile) == 168
+    assert profile[3] == 0.0 and profile[0] == pytest.approx(0.3)
