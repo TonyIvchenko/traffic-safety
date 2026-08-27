@@ -403,6 +403,98 @@ def predict_traffic_safety_live(
     )
 
 
+def _default_weather_batch(idx: int, hour_of_week: np.ndarray, month: int) -> np.ndarray:
+    """Climatological weather for every hour-of-week at a cell as a (frames, 5) array."""
+    frames = len(hour_of_week)
+    if "weather_climatology" not in MODEL_BUNDLE or "candidate_station_indices" not in MODEL_BUNDLE:
+        return np.zeros((frames, 5), dtype=np.float32)
+    station = int(_bundle_array("candidate_station_indices", np.int16)[idx])
+    return lookup_weather_climatology(
+        weather_cube=_bundle_array("weather_climatology", np.float32),
+        station_indices=np.full(frames, station, dtype=np.int32),
+        months=np.full(frames, int(month), dtype=np.int16),
+        hour_of_week=np.asarray(hour_of_week, dtype=np.int16),
+        weather_defaults=_bundle_array("weather_defaults", np.float32, default=np.zeros(5)),
+    )
+
+
+def weekly_risk_profile(lat: float, lon: float, month: int = 1) -> np.ndarray:
+    """Climatological risk score for every hour-of-week (0-167) at a point.
+
+    Scores all 168 weekly frames in a single batched ``predict_proba`` call, so it
+    is ~100x faster than calling :func:`predict_traffic_safety` per frame while
+    returning the identical values. Out-of-coverage points (or a missing model)
+    return an all-zero profile.
+    """
+    frames = 24 * 7
+    if not MODEL_BUNDLE:
+        return np.zeros(frames, dtype=np.float32)
+    month = max(1, min(12, int(month)))
+    resolution = int(MODEL_BUNDLE.get("resolution", 5))
+    cell_id = h3.latlng_to_cell(float(lat), float(lon), resolution)
+    idx = CELL_INDEX.get(cell_id)
+    if idx is None:
+        return np.zeros(frames, dtype=np.float32)
+
+    model = MODEL_BUNDLE["model"]
+    candidate_lats = _bundle_array("candidate_lats", np.float32)
+    candidate_lons = _bundle_array("candidate_lons", np.float32)
+    cell_total_counts = _bundle_array("cell_total_counts", np.float32)
+    cell_hour_counts = _bundle_array("cell_hour_counts", np.float32)
+
+    hour_of_week = np.arange(frames, dtype=np.int16)
+    prior_total = float(cell_total_counts[idx])
+    same_hour = cell_hour_counts[idx, :frames].astype(np.float32)
+    cell_lat = float(candidate_lats[idx])
+    cell_lon = float(candidate_lons[idx])
+
+    feature_count = int(getattr(model, "n_features_in_", 16))
+    if feature_count <= 11:
+        # Weather-free model: the 11-feature row (matches _prediction_feature_row).
+        # Compute every column in float64 and cast to float32 only at the end, so
+        # the trig/log1p match the per-call path bit-for-bit (it evaluates each
+        # scalar in float64 before rounding into the float32 array).
+        hour = (hour_of_week % 24).astype(np.float64)
+        dow = (hour_of_week // 24 + 1).astype(np.float64)
+        hour_angle = 2.0 * np.pi * hour / 24.0
+        dow_angle = 2.0 * np.pi * (dow - 1.0) / 7.0
+        month_angle = 2.0 * np.pi * float(month) / 12.0
+        same_hour64 = same_hour.astype(np.float64)
+        features = np.column_stack(
+            [
+                np.full(frames, cell_lat, dtype=np.float64),
+                np.full(frames, cell_lon, dtype=np.float64),
+                np.sin(hour_angle),
+                np.cos(hour_angle),
+                np.sin(dow_angle),
+                np.cos(dow_angle),
+                np.full(frames, np.sin(month_angle), dtype=np.float64),
+                np.full(frames, np.cos(month_angle), dtype=np.float64),
+                np.log1p(np.full(frames, prior_total, dtype=np.float64)),
+                np.log1p(same_hour64),
+                same_hour64 / max(prior_total, 1.0),
+            ]
+        ).astype(np.float32)
+    else:
+        weather = _default_weather_batch(idx, hour_of_week, month)
+        features = build_feature_matrix(
+            latitudes=np.full(frames, cell_lat, dtype=np.float32),
+            longitudes=np.full(frames, cell_lon, dtype=np.float32),
+            hour_of_week=hour_of_week,
+            months=np.full(frames, month, dtype=np.int8),
+            totals=np.full(frames, prior_total, dtype=np.float32),
+            same_hour=same_hour,
+            temp_c=weather[:, 0],
+            dewpoint_c=weather[:, 1],
+            relative_humidity_pct=weather[:, 2],
+            wind_speed_mps=weather[:, 3],
+            wet_hour=weather[:, 4],
+        )
+
+    probabilities = model.predict_proba(features)[:, 1].astype(np.float32)
+    return np.clip(probabilities, 0.0, 1.0)
+
+
 def explain_prediction(
     *,
     lat: float,
