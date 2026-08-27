@@ -573,3 +573,83 @@ def region_relative_advisory(
     result["frame_idx"] = frame_idx
     result["reference_size"] = len(profile)
     return result
+
+
+def region_weekly_profile_batched(
+    profile_fn,
+    region,
+    *,
+    rows: int = 3,
+    cols: int = 3,
+    month: int = 1,
+    statistic=DEFAULT_STATISTIC,
+) -> list[float]:
+    """Region weekly profile from a *batched* per-point profile builder.
+
+    ``profile_fn(lat, lon, month)`` returns a length-``WEEKLY_FRAMES`` sequence of
+    scores for a point (e.g. ``predict.weekly_risk_profile``). Each representative
+    grid point is profiled once, then the points are reduced per frame by
+    ``statistic``. Equivalent to :func:`region_weekly_profile` but ~100x faster.
+    Returns [] for an unknown region or when every point fails.
+    """
+    reg = region if isinstance(region, dict) else _regions.get_region(region)
+    if reg is None or "bbox" not in reg:
+        return []
+    points = grid_sample_points(_regions.region_bbox(reg), rows=rows, cols=cols)
+    if not points:
+        return []
+
+    point_profiles = []
+    for point in points:
+        try:
+            profile = profile_fn(point["lat"], point["lon"], month)
+        except Exception:  # noqa: BLE001 - a failing point is skipped, not fatal
+            continue
+        if profile is None or len(profile) < WEEKLY_FRAMES:
+            continue
+        point_profiles.append(profile)
+    if not point_profiles:
+        return []
+
+    aggregated: list[float] = []
+    for frame in range(WEEKLY_FRAMES):
+        scores = []
+        for profile in point_profiles:
+            score = _score_of(profile[frame])
+            if score is not None:
+                scores.append(score)
+        aggregated.append(_reduce(scores, statistic) if scores else 0.0)
+    return aggregated
+
+
+def relative_advisory_from_profile(
+    profile,
+    *,
+    frame_idx=None,
+    value=None,
+    drivers=None,
+    region=None,
+) -> dict:
+    """Relative advisory from a precomputed weekly reference ``profile``.
+
+    ``value`` is the compared score (defaults to ``profile[frame_idx]`` — the
+    climatological score at that frame; pass a live score in live mode). Attaches
+    ``reference_size``, and ``frame_idx`` / region id+name when supplied.
+    """
+    profile = profile if profile is not None else []
+    reference = [s for s in (_score_of(item) for item in profile) if s is not None]
+    if value is None:
+        if frame_idx is not None and 0 <= frame_idx < len(profile):
+            value = profile[frame_idx]
+        else:
+            value = 0.0
+    result = advisory.relative_advisory(value, reference, drivers=drivers)
+    result["reference_size"] = len(reference)
+    if frame_idx is not None:
+        result["frame_idx"] = frame_idx
+    if region is not None:
+        reg = region if isinstance(region, dict) else _regions.get_region(region)
+        if reg is not None:
+            result["region_id"] = reg.get("id")
+            result["region_name"] = reg.get("name")
+    return result

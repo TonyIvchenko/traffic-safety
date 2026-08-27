@@ -293,3 +293,81 @@ def test_weekly_profile_tolerates_failing_predict():
     profile = region_index.cell_weekly_profile(flaky, 0.0, 0.0)
     assert len(profile) == 168
     assert profile[3] == 0.0 and profile[0] == pytest.approx(0.3)
+
+
+# --------------------------------------------------------------------------- #
+# Batched profile builders (injected profile_fn)
+# --------------------------------------------------------------------------- #
+
+
+def _rising_profile_fn(lat, lon, month):
+    # A length-168 profile that rises across the week, independent of location.
+    return [0.20 + how / 1000.0 for how in range(168)]
+
+
+def test_region_weekly_profile_batched_matches_per_frame_shape():
+    region = {"id": "mid", "name": "Mid", "bbox": [2.0, 4.0, 2.0, 4.0]}
+    profile = region_index.region_weekly_profile_batched(_rising_profile_fn, region)
+    assert len(profile) == 168
+    # p90 over identical points is the per-frame score.
+    assert profile[0] == pytest.approx(0.20)
+    assert profile[167] == pytest.approx(0.20 + 167 / 1000.0)
+
+
+def test_region_weekly_profile_batched_equivalent_to_per_frame():
+    # The batched builder and the per-frame builder agree for the same underlying
+    # scores (here both driven by the rising function).
+    region = {"id": "mid", "name": "Mid", "bbox": [2.0, 4.0, 2.0, 4.0]}
+    batched = region_index.region_weekly_profile_batched(_rising_profile_fn, region)
+
+    def per_frame_predict(lat, lon, dow, hour, month):
+        return {"risk_score": 0.20 + ((dow - 1) * 24 + hour) / 1000.0}
+
+    per_frame = region_index.region_weekly_profile(per_frame_predict, region)
+    assert batched == pytest.approx(per_frame)
+
+
+def test_region_weekly_profile_batched_unknown_region_and_bad_length():
+    assert region_index.region_weekly_profile_batched(_rising_profile_fn, "atlantis") == []
+
+    def short_profile(lat, lon, month):
+        return [0.5] * 10  # too short -> skipped
+
+    region = {"id": "x", "name": "X", "bbox": [2.0, 4.0, 2.0, 4.0]}
+    assert region_index.region_weekly_profile_batched(short_profile, region) == []
+
+
+def test_region_weekly_profile_batched_skips_failing_points():
+    calls = {"n": 0}
+
+    def flaky(lat, lon, month):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        return [0.4] * 168
+
+    region = {"id": "x", "name": "X", "bbox": [2.0, 4.0, 2.0, 4.0]}
+    profile = region_index.region_weekly_profile_batched(flaky, region)
+    assert len(profile) == 168 and profile[0] == pytest.approx(0.4)
+
+
+def test_relative_advisory_from_profile_value_and_metadata():
+    profile = [0.20 + how / 1000.0 for how in range(168)]
+    # Default value = profile[frame_idx]; peak frame -> Extreme.
+    peak = region_index.relative_advisory_from_profile(
+        profile, frame_idx=167, region="los_angeles"
+    )
+    assert peak["level"] == "Extreme"
+    assert peak["frame_idx"] == 167
+    assert peak["reference_size"] == 168
+    assert peak["region_id"] == "los_angeles"
+    # Explicit value override above the whole range -> Extreme regardless of frame.
+    over = region_index.relative_advisory_from_profile(profile, frame_idx=0, value=0.95)
+    assert over["percentile"] == pytest.approx(1.0)
+    assert over["level"] == "Extreme"
+
+
+def test_relative_advisory_from_profile_empty_profile_is_absolute():
+    result = region_index.relative_advisory_from_profile([], value=0.4)
+    assert result["basis"] == "absolute"
+    assert result["reference_size"] == 0
