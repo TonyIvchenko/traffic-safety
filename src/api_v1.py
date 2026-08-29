@@ -210,6 +210,8 @@ class V1Dependencies:
     equity_vintage: dict
     countermeasure_provider: Callable[[], object]
     countermeasure_meta: dict
+    cell_weekly_profile_provider: Callable[..., object]
+    region_weekly_profile_provider: Callable[..., object]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -394,6 +396,7 @@ def _advisory_national_geojson(regions_indexed: list[dict], geometry_kind: str) 
             "region_id": entry.get("region_id"),
             "region_name": entry.get("region_name"),
             "risk_score": entry.get("risk_score"),
+            "percentile": advisory_block.get("percentile"),
             "level": advisory_block.get("level"),
             "level_index": advisory_block.get("level_index"),
             "color": advisory_block.get("color"),
@@ -909,7 +912,16 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
 
         score = _safe_float(result.get("risk_score")) or 0.0
         drivers = _advisory_drivers(result)
-        advisory_block = advisory.advisory(score, drivers=drivers)
+
+        # Relative advisory: the current score's percentile within this cell's own
+        # weekly climatology, so the level reflects "how does now compare to normal
+        # here" instead of saturating on absolute urban risk.
+        profile_month = int(result.get("month", month))
+        profile = deps.cell_weekly_profile_provider(float(lat), float(lon), profile_month)
+        frame_idx = (
+            int(result.get("local_day_of_week", day_of_week)) - 1
+        ) * 24 + int(result.get("local_hour", hour))
+        advisory_block = advisory.relative_advisory(score, profile, drivers=drivers)
 
         payload = {
             "lat": float(lat),
@@ -918,23 +930,18 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "cell_id": result.get("cell_id"),
             "in_coverage": bool(result.get("in_coverage", False)),
             "risk_score": advisory_block["risk_score"],
+            "frame_idx": frame_idx,
+            "reference_size": len(profile),
             "advisory": advisory_block,
             "weather": result.get("weather"),
             "weather_source": result.get("weather_source"),
             "hazards": result.get("hazards"),
         }
 
-        # A normal-vs-now comparison only means something in live mode: compare the
-        # live score against the climatological baseline for the same place/time.
+        # A normal-vs-now comparison (live only): the live score against this cell's
+        # climatological score at the same time-of-week (from the profile).
         if compare and mode_norm == "live":
-            normal = deps.predict_point(
-                lat=lat,
-                lon=lon,
-                day_of_week=int(result.get("local_day_of_week", day_of_week)),
-                hour=int(result.get("local_hour", hour)),
-                month=int(result.get("month", month)),
-            )
-            normal_score = _safe_float(normal.get("risk_score")) or 0.0
+            normal_score = profile[frame_idx] if 0 <= frame_idx < len(profile) else 0.0
             payload["compared_to_normal"] = region_index.compare_to_normal(score, normal_score)
 
         return payload
@@ -951,6 +958,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         mode: str = Query("climatology", description="'climatology' or 'live'"),
         day_of_week: int = Query(1, ge=1, le=7, description="Monday=1..Sunday=7"),
         hour: int = Query(0, ge=0, le=23, description="local hour 0-23"),
+        month: int = Query(1, ge=1, le=12, description="month 1-12 (weekly reference)"),
         provider: str = Query("auto", description="live weather provider (live)"),
         forecast_hours: int = Query(0, ge=0, le=48, description="hours ahead (live)"),
         compare: bool = Query(
@@ -984,29 +992,36 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         def _frame_label(idx: int) -> str:
             return deps.frame_labels[idx] if 0 <= idx < len(deps.frame_labels) else str(idx)
 
+        # The region's own weekly climatology (raw model, p90 over its grid) is the
+        # reference distribution for the relative advisory. In live mode the month
+        # is taken from the live prediction (below), not the request's month.
         requested_frame_idx = (day_of_week - 1) * 24 + hour
 
         if mode_norm == "climatology":
             response.headers["Cache-Control"] = "public, max-age=3600"
-            index = region_index.region_index(
-                deps.risk_cube, deps.coverage, resolved, frame_idx=requested_frame_idx
-            )
+            profile = deps.region_weekly_profile_provider(resolved["id"], month)
+            value = profile[requested_frame_idx] if 0 <= requested_frame_idx < len(profile) else 0.0
+            advisory_block = advisory.relative_advisory(value, profile)
             return {
-                **index,
+                "region_id": resolved["id"],
+                "region_name": resolved["name"],
+                "bbox": list(resolved["bbox"]),
                 "mode": "climatology",
                 "resolved_by": resolved_by,
                 "frame_idx": requested_frame_idx,
                 "frame_label": _frame_label(requested_frame_idx),
+                "reference_size": len(profile),
+                "risk_score": advisory_block["risk_score"],
+                "advisory": advisory_block,
             }
 
         # Live: sample the live predictor across the region's representative points.
         _validate_provider(provider)
         response.headers["Cache-Control"] = "no-store"
 
-        # Capture the live time-of-week from the first successful prediction so a
-        # normal-vs-now comparison aligns the climatological baseline to *now*
-        # (as /v1/advisory/point does), not to the request's day_of_week/hour —
-        # which are otherwise irrelevant in live mode.
+        # Capture the live time-of-week from the first successful prediction so the
+        # relative advisory / comparison align the climatological reference frame to
+        # *now*, not to the request's day_of_week/hour (irrelevant in live mode).
         captured: dict = {}
 
         def _predict(point_lat, point_lon):
@@ -1016,8 +1031,11 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             if "frame_idx" not in captured and isinstance(result, dict):
                 dow = result.get("local_day_of_week")
                 hr = result.get("local_hour")
+                mo = result.get("month")
                 if isinstance(dow, int) and isinstance(hr, int):
                     captured["frame_idx"] = (dow - 1) * 24 + hr
+                if isinstance(mo, int):
+                    captured["month"] = mo
             return result
 
         index = region_index.live_region_index(_predict, resolved)
@@ -1027,17 +1045,34 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 detail="live weather unavailable for every sampled point in this region",
             )
 
-        payload = {**index, "resolved_by": resolved_by}
+        live_frame_idx = captured.get("frame_idx", requested_frame_idx)
+        # Reference the live month's climatology (as /v1/advisory/point does), not
+        # the request's month, so the relative reading matches the current season.
+        profile = deps.region_weekly_profile_provider(resolved["id"], captured.get("month", month))
+        live_score = index["risk_score"]
+        advisory_block = advisory.relative_advisory(live_score, profile)
+        payload = {
+            "region_id": resolved["id"],
+            "region_name": resolved["name"],
+            "bbox": index["bbox"],
+            "mode": "live",
+            "resolved_by": resolved_by,
+            "frame_idx": live_frame_idx,
+            "frame_label": _frame_label(live_frame_idx),
+            "reference_size": len(profile),
+            "status": index["status"],
+            "sample_points": index["sample_points"],
+            "sample_count": index["sample_count"],
+            "failed_points": index["failed_points"],
+            "risk_score": live_score,
+            "risk_mean": index["risk_mean"],
+            "risk_max": index["risk_max"],
+            "risk_p90": index["risk_p90"],
+            "advisory": advisory_block,
+        }
         if compare:
-            baseline_frame_idx = captured.get("frame_idx", requested_frame_idx)
-            baseline = region_index.region_index(
-                deps.risk_cube, deps.coverage, resolved, frame_idx=baseline_frame_idx
-            )
-            payload["compared_to_normal"] = region_index.compare_to_normal(
-                index["risk_score"], baseline["risk_score"]
-            )
-            payload["baseline_frame_idx"] = baseline_frame_idx
-            payload["baseline_frame_label"] = _frame_label(baseline_frame_idx)
+            normal_score = profile[live_frame_idx] if 0 <= live_frame_idx < len(profile) else 0.0
+            payload["compared_to_normal"] = region_index.compare_to_normal(live_score, normal_score)
         return payload
 
     @router.get(
@@ -1049,6 +1084,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         response: Response,
         day_of_week: int = Query(1, ge=1, le=7, description="Monday=1..Sunday=7"),
         hour: int = Query(0, ge=0, le=23, description="local hour 0-23"),
+        month: int = Query(1, ge=1, le=12, description="month 1-12 (weekly reference)"),
         min_level: int = Query(
             1, ge=1, le=5, description="only regions at/above this advisory level index (1-5)"
         ),
@@ -1070,8 +1106,31 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             if 0 <= frame_idx < len(deps.frame_labels)
             else str(frame_idx)
         )
-        indexed = region_index.index_all_regions(
-            deps.risk_cube, deps.coverage, frame_idx=frame_idx
+        # Each region's advisory is relative to its own weekly climatology, so the
+        # level reflects how unusual this hour is for that metro (not saturated).
+        indexed = []
+        for reg in regions.list_regions():
+            profile = deps.region_weekly_profile_provider(reg["id"], month)
+            value = profile[frame_idx] if 0 <= frame_idx < len(profile) else 0.0
+            advisory_block = advisory.relative_advisory(value, profile)
+            indexed.append(
+                {
+                    "region_id": reg["id"],
+                    "region_name": reg["name"],
+                    "bbox": list(reg["bbox"]),
+                    "risk_score": advisory_block["risk_score"],
+                    "percentile": advisory_block["percentile"],
+                    "advisory": advisory_block,
+                }
+            )
+        # Rank by how elevated each metro is versus its own normal (percentile),
+        # breaking ties by absolute risk.
+        indexed.sort(
+            key=lambda entry: (
+                entry["percentile"] if entry["percentile"] is not None else -1.0,
+                entry["risk_score"],
+            ),
+            reverse=True,
         )
         if min_level > 1:
             indexed = [

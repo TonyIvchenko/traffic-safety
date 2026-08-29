@@ -74,7 +74,9 @@ from predict import (
     explain_for_result,
     predict_traffic_safety,
     predict_traffic_safety_live,
+    weekly_risk_profile,
 )
+import region_index
 from api_ratelimit import install_rate_limit_middleware, rate_limiter_from_env
 from api_v1 import V1Dependencies, build_v1_router
 from countermeasures import catalog_metadata as _countermeasure_catalog_metadata
@@ -1112,6 +1114,30 @@ def _equity_at_point(lat: float, lon: float) -> dict:
     return record
 
 
+@lru_cache(maxsize=8192)
+def _cell_weekly_profile_cached(lat_key: float, lon_key: float, month: int) -> tuple:
+    """A point's 168-frame climatological profile as an immutable tuple (cached)."""
+    return tuple(float(value) for value in weekly_risk_profile(lat_key, lon_key, month))
+
+
+def _cell_weekly_profile_provider(lat: float, lon: float, month: int = 1) -> tuple:
+    # Round the key only enough to normalise float noise (6 decimals ~0.1 m, far
+    # below the ~km H3 res-5 cell), so the profile's cell always matches the cell
+    # predict_point resolves for the same lat/lon while repeat/grid lookups still
+    # share a cache entry.
+    return _cell_weekly_profile_cached(round(float(lat), 6), round(float(lon), 6), int(month))
+
+
+@lru_cache(maxsize=1024)
+def _region_weekly_profile_provider(region_id: str, month: int = 1) -> tuple:
+    """A region's 168-frame climatology (p90 over its grid) as a tuple (cached)."""
+    return tuple(
+        region_index.region_weekly_profile_batched(
+            _cell_weekly_profile_provider, region_id, month=int(month)
+        )
+    )
+
+
 _v1_overlay_config = OVERLAY["config"]
 api.include_router(
     build_v1_router(
@@ -1147,6 +1173,8 @@ api.include_router(
             },
             countermeasure_provider=_get_countermeasure_store,
             countermeasure_meta=_countermeasure_catalog_metadata(),
+            cell_weekly_profile_provider=_cell_weekly_profile_provider,
+            region_weekly_profile_provider=_region_weekly_profile_provider,
         )
     )
 )

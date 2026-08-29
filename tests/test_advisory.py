@@ -102,11 +102,20 @@ def test_relative_advisory_discriminates_within_reference():
     assert "below normal" in low["message"]
 
 
-def test_relative_advisory_saturated_reference_is_moderate_not_extreme():
+def test_relative_advisory_flat_reference_falls_back_to_absolute():
+    # A perfectly flat reference carries no relative signal -> absolute scale.
     flat = [0.996] * 50
     result = advisory.relative_advisory(0.996, flat)
-    assert result["percentile"] == 0.5
-    assert result["level"] == "Moderate"  # no weekly variation -> exactly typical
+    assert result["basis"] == "absolute"
+    assert result["percentile"] is None
+    assert result["level"] == "Extreme"  # absolute mapping of 0.996
+
+
+def test_relative_advisory_all_zero_reference_is_low():
+    # Out-of-coverage cells produce an all-zero weekly profile -> Low, not Moderate.
+    result = advisory.relative_advisory(0.0, [0.0] * 168)
+    assert result["basis"] == "absolute"
+    assert result["level"] == "Low"
 
 
 def test_relative_advisory_falls_back_to_absolute_when_no_reference():

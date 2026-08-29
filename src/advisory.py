@@ -166,15 +166,20 @@ def relative_advisory(
     """
     score = _clamp(value)
     factors = [str(driver).strip() for driver in (drivers or []) if str(driver).strip()]
-    pct = percentile_of(value, reference)
+    numbers = [n for n in (_num_or_none(item) for item in (reference or [])) if n is not None]
 
-    if pct is None:
+    # Fewer than two distinct reference values means no relative signal — an empty
+    # reference, an out-of-coverage cell's all-zero weekly profile, or a perfectly
+    # flat climatology. Fall back to the absolute scale so a 0.0 out-of-coverage
+    # score reads "Low" rather than the midrank "Moderate".
+    if len(set(numbers)) < 2:
         result = advisory(score, drivers=factors, thresholds=absolute_thresholds)
         result["percentile"] = None
         result["basis"] = "absolute"
         result["relative_descriptor"] = None
         return result
 
+    pct = percentile_of(value, numbers)
     level = _level_for_fraction(pct, thresholds)
     descriptor = relative_descriptor(pct)
     message = f"{level['name']} — {level['advice']} Currently {descriptor} for this location."

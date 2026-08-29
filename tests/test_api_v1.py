@@ -151,6 +151,17 @@ def test_v1_advisory_point_rejects_bad_mode():
     )
 
 
+def test_v1_advisory_point_out_of_coverage_is_low():
+    client = TestClient(MODULE.api)
+    # An ocean point is out of coverage: its all-zero weekly profile carries no
+    # relative signal, so the advisory falls back to absolute -> Low (not Moderate).
+    payload = client.get("/v1/advisory/point?lat=0&lon=-30").json()
+    assert payload["in_coverage"] is False
+    assert payload["risk_score"] == 0.0
+    assert payload["advisory"]["level"] == "Low"
+    assert payload["advisory"]["basis"] == "absolute"
+
+
 def test_v1_advisory_point_live_folds_hazards_and_compares(monkeypatch):
     snapshot = SimpleNamespace(
         provider="nws",
@@ -208,7 +219,10 @@ def test_v1_advisory_region_by_id():
     assert payload["advisory"]["level"] in {
         "Low", "Moderate", "Elevated", "High", "Extreme"
     }
-    assert payload["sample_count"] >= 0
+    # Advisory is relative to the region's own weekly climatology.
+    assert payload["advisory"]["basis"] == "relative_to_local_weekly_normal"
+    assert 0.0 <= payload["advisory"]["percentile"] <= 1.0
+    assert payload["reference_size"] == 168
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 
@@ -279,12 +293,13 @@ def test_v1_advisory_region_live_and_compare(monkeypatch):
     assert payload["advisory"]["level"] in {
         "Low", "Moderate", "Elevated", "High", "Extreme"
     }
+    assert payload["advisory"]["basis"] == "relative_to_local_weekly_normal"
     assert payload["compared_to_normal"]["comparison"] in {
         "worse than normal", "about normal", "better than normal"
     }
-    # Baseline aligned to now (Fri 17:00), NOT the default Monday 00:00 frame.
-    assert payload["baseline_frame_idx"] == (5 - 1) * 24 + 17
-    assert payload["baseline_frame_label"] == "Fri 17:00"
+    # Relative reference frame aligned to now (Fri 17:00), not the default Mon 00:00.
+    assert payload["frame_idx"] == (5 - 1) * 24 + 17
+    assert payload["frame_label"] == "Fri 17:00"
     assert response.headers["cache-control"] == "no-store"
 
 
@@ -311,11 +326,14 @@ def test_v1_advisory_national_json():
     assert payload["frame_idx"] == (5 - 1) * 24 + 17
     assert payload["count"] == len(payload["regions"])
     assert payload["count"] >= 15
-    # Sorted by risk score, highest first.
-    scores = [r["risk_score"] for r in payload["regions"]]
-    assert scores == sorted(scores, reverse=True)
+    # Ranked by how elevated each metro is versus its own normal (percentile desc).
+    percentiles = [r["percentile"] for r in payload["regions"]]
+    assert percentiles == sorted(percentiles, reverse=True)
     first = payload["regions"][0]
-    assert {"region_id", "region_name", "risk_score", "advisory"} <= set(first)
+    assert {"region_id", "region_name", "risk_score", "percentile", "advisory"} <= set(first)
+    # The relative scale discriminates: metros no longer all read the same level.
+    levels = {r["advisory"]["level"] for r in payload["regions"]}
+    assert len(levels) >= 2
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 
