@@ -223,6 +223,11 @@ def test_v1_advisory_region_by_id():
     assert payload["advisory"]["basis"] == "relative_to_local_weekly_normal"
     assert 0.0 <= payload["advisory"]["percentile"] <= 1.0
     assert payload["reference_size"] == 168
+    # Context-aware message names the region and the time-of-week.
+    message = payload["advisory"]["message"]
+    assert message.startswith(payload["advisory"]["level"])
+    assert "Los Angeles" in message
+    assert "Friday evening" in message
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 

@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 import requests
 
 import advisory
+import advisory_messages
 import grant_html
 from live_weather import LiveWeatherProviderError
 import region_index
@@ -922,6 +923,9 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             int(result.get("local_day_of_week", day_of_week)) - 1
         ) * 24 + int(result.get("local_hour", hour))
         advisory_block = advisory.relative_advisory(score, profile, drivers=drivers)
+        advisory_block["message"] = advisory_messages.compose(
+            advisory_block, frame_idx=frame_idx
+        )
 
         payload = {
             "lat": float(lat),
@@ -1002,6 +1006,9 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             profile = deps.region_weekly_profile_provider(resolved["id"], month)
             value = profile[requested_frame_idx] if 0 <= requested_frame_idx < len(profile) else 0.0
             advisory_block = advisory.relative_advisory(value, profile)
+            advisory_block["message"] = advisory_messages.compose(
+                advisory_block, location_name=resolved["name"], frame_idx=requested_frame_idx
+            )
             return {
                 "region_id": resolved["id"],
                 "region_name": resolved["name"],
@@ -1051,6 +1058,9 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         profile = deps.region_weekly_profile_provider(resolved["id"], captured.get("month", month))
         live_score = index["risk_score"]
         advisory_block = advisory.relative_advisory(live_score, profile)
+        advisory_block["message"] = advisory_messages.compose(
+            advisory_block, location_name=resolved["name"], frame_idx=live_frame_idx
+        )
         payload = {
             "region_id": resolved["id"],
             "region_name": resolved["name"],
@@ -1113,6 +1123,9 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             profile = deps.region_weekly_profile_provider(reg["id"], month)
             value = profile[frame_idx] if 0 <= frame_idx < len(profile) else 0.0
             advisory_block = advisory.relative_advisory(value, profile)
+            advisory_block["message"] = advisory_messages.compose(
+                advisory_block, location_name=reg["name"], frame_idx=frame_idx
+            )
             indexed.append(
                 {
                     "region_id": reg["id"],
