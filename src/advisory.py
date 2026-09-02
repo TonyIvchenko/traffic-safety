@@ -197,3 +197,21 @@ def relative_advisory(
         "drivers": factors,
         "message": message,
     }
+
+
+def relative_advisory_scale(*, thresholds=RELATIVE_ADVISORY_THRESHOLDS) -> list[dict]:
+    """The 5 levels with the percentile band that maps to each (for discovery)."""
+    bounds = [0.0, *[float(t) for t in thresholds], 1.0]
+    scale = []
+    for index, level in enumerate(ADVISORY_LEVELS):
+        scale.append(
+            {
+                "index": level["index"],
+                "name": level["name"],
+                "color": level["color"],
+                "advice": level["advice"],
+                "min_percentile": round(bounds[index], 4),
+                "max_percentile": round(bounds[index + 1], 4),
+            }
+        )
+    return scale

@@ -810,6 +810,29 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "CMFs, not project-specific)."
                 ),
             },
+            "advisory": {
+                "enabled": True,
+                "basis": "relative_to_local_weekly_normal",
+                "scale": advisory.relative_advisory_scale(),
+                "region_count": len(regions.REGIONS),
+                "regions": [
+                    {"id": region["id"], "name": region["name"]}
+                    for region in regions.list_regions()
+                ],
+                "endpoints": [
+                    "/v1/advisory/point",
+                    "/v1/advisory/region",
+                    "/v1/advisory/national",
+                ],
+                "formats": ["json", "geojson"],
+                "note": (
+                    "Road Risk Advisory ('AQI for driving'): a 5-level scale from a "
+                    "location's risk percentile within its own 168-hour weekly "
+                    "climatology, so levels reflect how unusual the current hour is "
+                    "rather than absolute urban risk. Out-of-coverage or flat-climatology "
+                    "locations fall back to an absolute scale."
+                ),
+            },
             "docs_url": "/v1/docs",
         }
 

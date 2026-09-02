@@ -138,3 +138,16 @@ def test_relative_descriptor_bands():
     assert advisory.relative_descriptor(0.8) == "above normal"
     assert advisory.relative_descriptor(0.9) == "well above normal"
     assert advisory.relative_descriptor(0.99) == "near this location's weekly peak"
+
+
+def test_relative_advisory_scale():
+    scale = advisory.relative_advisory_scale()
+    assert [level["name"] for level in scale] == [
+        "Low", "Moderate", "Elevated", "High", "Extreme"
+    ]
+    assert scale[0]["min_percentile"] == 0.0
+    assert scale[-1]["max_percentile"] == 1.0
+    # Contiguous, non-overlapping percentile bands matching the thresholds.
+    for lower, upper in zip(scale, scale[1:]):
+        assert lower["max_percentile"] == upper["min_percentile"]
+    assert scale[3]["min_percentile"] == 0.85 and scale[3]["max_percentile"] == 0.95

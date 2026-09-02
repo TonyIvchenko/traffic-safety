@@ -45,6 +45,21 @@ def test_v1_meta_describes_coverage_and_providers():
     assert "nws" in payload["providers_accepted"]
 
 
+def test_v1_meta_describes_advisory_scale():
+    client = TestClient(MODULE.api)
+    advisory_meta = client.get("/v1/meta").json()["advisory"]
+    assert advisory_meta["enabled"] is True
+    assert advisory_meta["basis"] == "relative_to_local_weekly_normal"
+    assert [level["name"] for level in advisory_meta["scale"]] == [
+        "Low", "Moderate", "Elevated", "High", "Extreme"
+    ]
+    assert advisory_meta["scale"][-1]["max_percentile"] == 1.0
+    assert advisory_meta["region_count"] == len(advisory_meta["regions"])
+    assert advisory_meta["region_count"] >= 15
+    assert any(r["id"] == "los_angeles" for r in advisory_meta["regions"])
+    assert "/v1/advisory/national" in advisory_meta["endpoints"]
+
+
 def test_v1_point_climatology():
     client = TestClient(MODULE.api)
     response = client.get(
