@@ -825,6 +825,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "/v1/advisory/national",
                 ],
                 "formats": ["json", "geojson"],
+                "caveats": advisory_messages.caveats(),
                 "note": (
                     "Road Risk Advisory ('AQI for driving'): a 5-level scale from a "
                     "location's risk percentile within its own 168-hour weekly "
@@ -960,6 +961,9 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "frame_idx": frame_idx,
             "reference_size": len(profile),
             "advisory": advisory_block,
+            "caveats": advisory_messages.caveats(
+                mode=mode_norm, basis=advisory_block["basis"]
+            ),
             "weather": result.get("weather"),
             "weather_source": result.get("weather_source"),
             "hazards": result.get("hazards"),
@@ -1043,6 +1047,9 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 "reference_size": len(profile),
                 "risk_score": advisory_block["risk_score"],
                 "advisory": advisory_block,
+                "caveats": advisory_messages.caveats(
+                    mode="climatology", basis=advisory_block["basis"]
+                ),
             }
 
         # Live: sample the live predictor across the region's representative points.
@@ -1102,6 +1109,11 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "risk_max": index["risk_max"],
             "risk_p90": index["risk_p90"],
             "advisory": advisory_block,
+            "caveats": advisory_messages.caveats(
+                mode="live",
+                basis=advisory_block["basis"],
+                live_incomplete=index["failed_points"] > 0,
+            ),
         }
         if compare:
             normal_score = profile[live_frame_idx] if 0 <= live_frame_idx < len(profile) else 0.0
@@ -1175,11 +1187,14 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 if (entry.get("advisory") or {}).get("level_index", 1) >= min_level
             ]
 
+        national_caveats = advisory_messages.caveats(mode="climatology")
+
         if fmt == "geojson":
             payload = _advisory_national_geojson(indexed, geom)
             payload["mode"] = "climatology"
             payload["frame_idx"] = frame_idx
             payload["frame_label"] = frame_label
+            payload["caveats"] = national_caveats
             return JSONResponse(
                 content=payload,
                 media_type="application/geo+json",
@@ -1193,6 +1208,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "frame_label": frame_label,
             "count": len(indexed),
             "regions": indexed,
+            "caveats": national_caveats,
         }
 
     @router.get(

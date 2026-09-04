@@ -90,3 +90,26 @@ def test_compose_message_starts_with_level_from_real_advisory():
     block = advisory.relative_advisory(0.9, [0.1 + i / 100.0 for i in range(20)])
     message = am.compose(block, location_name="Denver", frame_idx=100)
     assert message.startswith(block["level"])
+
+
+def test_caveats_relative_climatology():
+    items = am.caveats(mode="climatology", basis="relative_to_local_weekly_normal")
+    assert any("percentile" in c for c in items)
+    assert any("bounding boxes" in c for c in items)
+    assert not any("weather providers" in c for c in items)  # no live caveat
+
+
+def test_caveats_absolute_basis():
+    items = am.caveats(basis="absolute")
+    assert any("absolute risk scale" in c for c in items)
+    assert not any(c.startswith("The level is relative") for c in items)
+
+
+def test_caveats_live_and_incomplete():
+    items = am.caveats(mode="live", live_incomplete=True)
+    assert any("weather providers" in c for c in items)
+    assert any("could not be scored" in c for c in items)
+    # Not incomplete -> no partial caveat.
+    assert not any(
+        "could not be scored" in c for c in am.caveats(mode="live", live_incomplete=False)
+    )

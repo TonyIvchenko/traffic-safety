@@ -149,6 +149,8 @@ def test_v1_advisory_point_climatology():
     assert response.status_code == 200
     payload = response.json()
     assert payload["mode"] == "climatology"
+    assert isinstance(payload["caveats"], list) and payload["caveats"]
+    assert any("percentile" in c for c in payload["caveats"])
     adv = payload["advisory"]
     assert adv["level"] in {"Low", "Moderate", "Elevated", "High", "Extreme"}
     assert adv["level_index"] in {1, 2, 3, 4, 5}

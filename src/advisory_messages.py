@@ -32,6 +32,37 @@ _RELATIVE_CLAUSES = {
 }
 
 
+_BASE_CAVEATS = (
+    "The level is relative to this location's own typical week (a percentile), not "
+    "an absolute crash probability.",
+    "Metro regions are approximate bounding boxes for screening, not official MSA "
+    "boundaries.",
+    "Risk reflects historical crash patterns and is guidance, not a guarantee of "
+    "safety.",
+)
+
+
+def caveats(*, mode="climatology", basis="relative_to_local_weekly_normal", live_incomplete=False) -> list[str]:
+    """Honest limitations for an advisory response, tailored to its context."""
+    items = list(_BASE_CAVEATS)
+    if basis == "absolute":
+        items[0] = (
+            "This location has no usable weekly variation (out of coverage or flat "
+            "climatology), so the level uses an absolute risk scale."
+        )
+    if str(mode) == "live":
+        items.append(
+            "Live conditions come from third-party weather providers and can lag or "
+            "be unavailable."
+        )
+        if live_incomplete:
+            items.append(
+                "Some sample points could not be scored; the reading reflects the "
+                "remaining points."
+            )
+    return items
+
+
 def _daypart(hour: int) -> str:
     if hour < 5:
         return "overnight"
