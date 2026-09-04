@@ -334,6 +334,72 @@ fallback).
 - These are **representative screening values**, not project-specific CMFs, and
   **not a substitute for an engineering study** before programming funds.
 
+## Road Risk Advisory ("AQI for driving")
+
+A public, five-level advisory that answers "how risky is driving here, right
+now, compared to normal?" The level is a location's risk **percentile within its
+own 168-hour weekly climatology**, so it shifts with time and place — a wet
+Saturday 2 a.m. reads high, a quiet Wednesday noon reads low — instead of
+saturating at "extreme" everywhere dense (which absolute crash-risk does, since
+urban crash density is high around the clock).
+
+| Level | Color | Percentile of the local week |
+|---|---|---|
+| Low | `#1a9850` | below 50th |
+| Moderate | `#a6d96a` | 50th–70th |
+| Elevated | `#fdae61` | 70th–85th |
+| High | `#f46d43` | 85th–95th |
+| Extreme | `#d7191c` | 95th and above |
+
+The weekly reference comes from the raw model (the display overlay is normalised
+and too saturated to discriminate); it is scored in one batched pass per point
+and cached. Regions are ~two dozen metro bounding boxes (see `/v1/meta`).
+
+### Serve the analysis (`/v1/advisory`)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /v1/advisory/point` | Advisory for a point (`mode=climatology\|live`, `day_of_week`/`hour`/`month`, or live `forecast_hours`/`provider`; `compare=true` adds now-vs-normal) |
+| `GET /v1/advisory/region` | Advisory for a metro (`region=<id>` or `lat`+`lon`; same modes; live samples a grid) |
+| `GET /v1/advisory/national` | All metros ranked by how elevated each is vs its own normal (`min_level`, JSON or `?format=geojson&geometry=point\|bbox`) |
+
+```bash
+# Point advisory now vs a normal Friday evening (live, with comparison)
+curl "http://127.0.0.1:8080/v1/advisory/point?lat=34.0522&lon=-118.2437&mode=live&compare=true"
+
+# A metro's climatological advisory for Friday 5pm
+curl "http://127.0.0.1:8080/v1/advisory/region?region=los_angeles&day_of_week=5&hour=17"
+
+# Nationwide snapshot as GeoJSON (metro centroids coloured by level)
+curl "http://127.0.0.1:8080/v1/advisory/national?day_of_week=5&hour=17&format=geojson"
+```
+
+Each response carries a context-aware `message` and honest `caveats`; the scale,
+percentile bands, and region catalog are discoverable under `meta.advisory` at
+`/v1/meta`.
+
+### Precompute a snapshot (offline)
+
+```bash
+conda run -n playground python scripts/build_advisory_snapshot.py --month 1 --day-of-week 5 --hour 17
+```
+
+Writes each region's weekly reference profile plus a ranked national snapshot
+(JSON + GeoJSON) to `data/advisory/` — precomputing lets the API warm its cache
+instead of paying the first-request cost.
+
+### Methodology & caveats
+
+- The level is **relative** — a percentile within the location's own typical
+  week — not an absolute crash probability. `risk_score` (the raw 0–1 model
+  value) is reported alongside for reference.
+- Out-of-coverage or flat-climatology locations have no relative signal and fall
+  back to an **absolute** scale (`advisory.basis == "absolute"`).
+- Live mode depends on third-party weather providers; a partial provider outage
+  is tolerated (the reading reflects the points that scored) and flagged.
+- Regions are approximate metro bounding boxes for screening, **not** official
+  MSA boundaries. The advisory is guidance, not a guarantee of safety.
+
 ## Recommended Shape
 
 The most practical nationwide design is a two-layer system:
