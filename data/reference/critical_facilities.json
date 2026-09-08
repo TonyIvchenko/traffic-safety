@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "source": "Curated illustrative sample of critical facilities with approximate coordinates. For production, replace with an authoritative feed (HIFLD Hospitals / Fire Stations, OpenStreetMap emergency amenities) via scripts/download_facilities.py.",
+  "note": "Points of safety used by the emergency/evacuation endpoints: hospitals (some trauma centers), fire stations, and emergency shelters. 'capacity' is beds for hospitals or shelter capacity where known, else null. Coordinates are approximate and for screening only.",
+  "kinds": ["hospital", "fire_station", "emergency_shelter"],
+  "facilities": [
+    {"id": "hosp_cedars_sinai_la", "name": "Cedars-Sinai Medical Center", "kind": "hospital", "lat": 34.075400, "lon": -118.380500, "state": "CA", "capacity": 886, "trauma_center": false},
+    {"id": "hosp_lac_usc_la", "name": "LAC+USC Medical Center", "kind": "hospital", "lat": 34.057800, "lon": -118.209300, "state": "CA", "capacity": 600, "trauma_center": true},
+    {"id": "fire_lafd_9_la", "name": "LAFD Fire Station 9", "kind": "fire_station", "lat": 34.041300, "lon": -118.244700, "state": "CA", "capacity": null, "trauma_center": false},
+    {"id": "shelter_la_convention", "name": "Los Angeles Convention Center", "kind": "emergency_shelter", "lat": 34.040300, "lon": -118.269600, "state": "CA", "capacity": 2000, "trauma_center": false},
+    {"id": "hosp_bellevue_ny", "name": "Bellevue Hospital Center", "kind": "hospital", "lat": 40.739200, "lon": -73.975700, "state": "NY", "capacity": 844, "trauma_center": true},
+    {"id": "hosp_nyu_langone_ny", "name": "NYU Langone Health", "kind": "hospital", "lat": 40.742100, "lon": -73.974000, "state": "NY", "capacity": 830, "trauma_center": false},
+    {"id": "fire_fdny_10_ny", "name": "FDNY Engine 10 / Ladder 10", "kind": "fire_station", "lat": 40.710700, "lon": -74.012100, "state": "NY", "capacity": null, "trauma_center": false},
+    {"id": "shelter_javits_ny", "name": "Jacob K. Javits Convention Center", "kind": "emergency_shelter", "lat": 40.757700, "lon": -74.002200, "state": "NY", "capacity": 2500, "trauma_center": false},
+    {"id": "hosp_northwestern_chi", "name": "Northwestern Memorial Hospital", "kind": "hospital", "lat": 41.895500, "lon": -87.621500, "state": "IL", "capacity": 894, "trauma_center": false},
+    {"id": "hosp_stroger_chi", "name": "John H. Stroger Jr. Hospital", "kind": "hospital", "lat": 41.874200, "lon": -87.673900, "state": "IL", "capacity": 464, "trauma_center": true},
+    {"id": "fire_cfd_42_chi", "name": "Chicago Fire Department Engine 42", "kind": "fire_station", "lat": 41.889500, "lon": -87.635300, "state": "IL", "capacity": null, "trauma_center": false},
+    {"id": "shelter_mccormick_chi", "name": "McCormick Place", "kind": "emergency_shelter", "lat": 41.851400, "lon": -87.616700, "state": "IL", "capacity": 3000, "trauma_center": false},
+    {"id": "hosp_memorial_hermann_hou", "name": "Memorial Hermann-Texas Medical Center", "kind": "hospital", "lat": 29.710600, "lon": -95.397600, "state": "TX", "capacity": 1000, "trauma_center": true},
+    {"id": "fire_hfd_8_hou", "name": "Houston Fire Department Station 8", "kind": "fire_station", "lat": 29.751900, "lon": -95.363700, "state": "TX", "capacity": null, "trauma_center": false},
+    {"id": "shelter_grb_hou", "name": "George R. Brown Convention Center", "kind": "emergency_shelter", "lat": 29.752700, "lon": -95.356000, "state": "TX", "capacity": 5000, "trauma_center": false},
+    {"id": "hosp_jackson_mia", "name": "Jackson Memorial Hospital", "kind": "hospital", "lat": 25.790700, "lon": -80.212600, "state": "FL", "capacity": 1500, "trauma_center": true},
+    {"id": "fire_mia_1", "name": "Miami Fire-Rescue Station 1", "kind": "fire_station", "lat": 25.779600, "lon": -80.191800, "state": "FL", "capacity": null, "trauma_center": false},
+    {"id": "shelter_mia_dade", "name": "Miami-Dade Emergency Shelter", "kind": "emergency_shelter", "lat": 25.761700, "lon": -80.191800, "state": "FL", "capacity": 1000, "trauma_center": false}
+  ]
+}

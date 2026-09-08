@@ -14,6 +14,7 @@ TIGER_RAW_DIR = TRAFFIC_RAW_DIR / "tiger"
 TIGER_PRISEC_DIR = TIGER_RAW_DIR / "prisecroads"
 CENSUS_RAW_DIR = DATA_DIR / "raw" / "census"
 EQUITY_RAW_DIR = DATA_DIR / "raw" / "equity"
+FACILITIES_RAW_DIR = DATA_DIR / "raw" / "facilities"
 NOAA_RAW_DIR = DATA_DIR / "raw" / "noaa"
 NOAA_ISD_LITE_DIR = NOAA_RAW_DIR / "isd-lite"
 PROCESSED_DIR = DATA_DIR / "processed"
@@ -38,6 +39,8 @@ CELL_GEOID_PATH = PROCESSED_GEO_DIR / "cell_geoid.csv.gz"
 HIGH_INJURY_NETWORK_PATH = PROCESSED_SAFETY_DIR / "high_injury_network.parquet"
 TRACT_EQUITY_PATH = PROCESSED_EQUITY_DIR / "tract_equity.csv.gz"
 EQUITY_OVERLAY_PATH = PROCESSED_EQUITY_DIR / "segment_equity.parquet"
+CRITICAL_FACILITIES_REFERENCE_PATH = DATA_DIR / "reference" / "critical_facilities.json"
+CRITICAL_FACILITIES_PATH = PROCESSED_DIR / "critical_facilities.parquet"
 STATION_HISTORY_PATH = NOAA_RAW_DIR / "isd-history.csv"
 REPRESENTATIVE_STATIONS_PATH = PROCESSED_WEATHER_DIR / "representative_stations.csv.gz"
 CELL_WEATHER_STATIONS_PATH = PROCESSED_WEATHER_DIR / "cell_weather_stations.csv.gz"
@@ -136,6 +139,7 @@ def ensure_dirs() -> None:
     TIGER_PRISEC_DIR.mkdir(parents=True, exist_ok=True)
     CENSUS_RAW_DIR.mkdir(parents=True, exist_ok=True)
     EQUITY_RAW_DIR.mkdir(parents=True, exist_ok=True)
+    FACILITIES_RAW_DIR.mkdir(parents=True, exist_ok=True)
     NOAA_RAW_DIR.mkdir(parents=True, exist_ok=True)
     NOAA_ISD_LITE_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
