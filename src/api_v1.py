@@ -20,6 +20,7 @@ import requests
 
 import advisory
 import advisory_messages
+import facilities
 import grant_html
 from live_weather import LiveWeatherProviderError
 import region_index
@@ -213,6 +214,7 @@ class V1Dependencies:
     countermeasure_meta: dict
     cell_weekly_profile_provider: Callable[..., object]
     region_weekly_profile_provider: Callable[..., object]
+    facility_provider: Callable[[], object]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -1209,6 +1211,52 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "count": len(indexed),
             "regions": indexed,
             "caveats": national_caveats,
+        }
+
+    @router.get(
+        "/emergency/nearest-facility",
+        summary="Nearest critical facilities (hospitals, shelters, fire stations)",
+    )
+    def nearest_facility(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+        kind: str | None = Query(
+            None, description="filter: hospital, fire_station, or emergency_shelter"
+        ),
+        k: int = Query(3, ge=1, le=25, description="how many to return"),
+        max_km: float | None = Query(
+            None, gt=0.0, le=500.0, description="only facilities within this radius (km)"
+        ),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        kind_norm = kind.strip().lower() if kind and kind.strip() else None
+        if kind_norm is not None and kind_norm not in facilities.FACILITY_KINDS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"kind must be one of {list(facilities.FACILITY_KINDS)}",
+            )
+        store = deps.facility_provider()
+        if max_km is not None:
+            found = store.within_radius(lat, lon, max_km, kind=kind_norm)[:k]
+        else:
+            found = store.nearest(lat, lon, kind=kind_norm, k=k)
+        for facility in found:
+            facility["bearing_deg"] = round(
+                sun_glare.bearing_deg(lat, lon, facility["lat"], facility["lon"]), 1
+            )
+        return {
+            "lat": float(lat),
+            "lon": float(lon),
+            "kind": kind_norm,
+            "count": len(found),
+            "facilities": found,
+            "caveats": [
+                "Facilities are a curated illustrative sample with approximate "
+                "coordinates; replace with an authoritative feed for operational use.",
+                "Distance is straight-line (great-circle), not drive time or an "
+                "accessible route.",
+            ],
         }
 
     @router.get(

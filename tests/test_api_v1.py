@@ -397,6 +397,42 @@ def test_v1_advisory_national_rejects_bad_format_and_geometry():
     assert client.get("/v1/advisory/national?format=geojson&geometry=blob").status_code == 422
 
 
+def test_v1_nearest_facility():
+    client = TestClient(MODULE.api)
+    payload = client.get("/v1/emergency/nearest-facility?lat=34.05&lon=-118.24&k=3").json()
+    assert payload["count"] <= 3 and payload["count"] >= 1
+    facilities = payload["facilities"]
+    # Sorted by straight-line distance, each annotated with distance + bearing.
+    distances = [f["distance_km"] for f in facilities]
+    assert distances == sorted(distances)
+    assert all("bearing_deg" in f and "kind" in f for f in facilities)
+    assert client.get("/v1/emergency/nearest-facility?lat=34.05&lon=-118.24").headers[
+        "cache-control"
+    ] == "public, max-age=3600"
+
+
+def test_v1_nearest_facility_kind_filter():
+    client = TestClient(MODULE.api)
+    payload = client.get(
+        "/v1/emergency/nearest-facility?lat=34.05&lon=-118.24&kind=hospital&k=5"
+    ).json()
+    assert payload["kind"] == "hospital"
+    assert payload["facilities"] and all(f["kind"] == "hospital" for f in payload["facilities"])
+
+
+def test_v1_nearest_facility_radius_and_bad_kind():
+    client = TestClient(MODULE.api)
+    # Tight radius around downtown LA returns only nearby facilities.
+    near = client.get(
+        "/v1/emergency/nearest-facility?lat=34.05&lon=-118.24&max_km=15&k=25"
+    ).json()
+    assert all(f["distance_km"] <= 15.0 for f in near["facilities"])
+    # Unknown kind -> 422.
+    assert client.get(
+        "/v1/emergency/nearest-facility?lat=34&lon=-118&kind=zoo"
+    ).status_code == 422
+
+
 def test_v1_meta_includes_model_metrics():
     client = TestClient(MODULE.api)
     payload = client.get("/v1/meta").json()

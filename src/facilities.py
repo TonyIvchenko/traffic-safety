@@ -28,6 +28,7 @@ DEFAULT_FACILITIES_PARQUET = REPO_DIR / "data" / "processed" / "critical_facilit
 REFERENCE_FACILITIES_JSON = REPO_DIR / "data" / "reference" / "critical_facilities.json"
 
 FACILITY_FIELDS = ("id", "name", "kind", "lat", "lon", "state", "capacity", "trauma_center")
+FACILITY_KINDS = ("hospital", "fire_station", "emergency_shelter")
 
 
 def _to_float(value):

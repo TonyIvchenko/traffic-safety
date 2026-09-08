@@ -83,6 +83,7 @@ from countermeasures import catalog_metadata as _countermeasure_catalog_metadata
 from countermeasures import load_countermeasure_store as _get_countermeasure_store
 from equity import equity_for_tract as _equity_for_tract
 from equity import load_equity_overlay as _get_equity_overlay
+from facilities import load_facility_store as _get_facility_store
 from geo_lookup import tract_of as _tract_of
 from grant_store import get_default_store as _get_grant_store
 from watch_store import get_default_store as _get_watch_store
@@ -1175,6 +1176,7 @@ api.include_router(
             countermeasure_meta=_countermeasure_catalog_metadata(),
             cell_weekly_profile_provider=_cell_weekly_profile_provider,
             region_weekly_profile_provider=_region_weekly_profile_provider,
+            facility_provider=_get_facility_store,
         )
     )
 )
