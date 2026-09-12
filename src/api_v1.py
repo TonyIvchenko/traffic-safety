@@ -20,6 +20,7 @@ import requests
 
 import advisory
 import advisory_messages
+import evacuation
 import facilities
 import grant_html
 from live_weather import LiveWeatherProviderError
@@ -523,6 +524,40 @@ def _compare_geojson(result: dict) -> dict:
         "type": "FeatureCollection",
         "objective": result["objective"],
         "recommended_index": result["recommended_index"],
+        "features": features,
+    }
+
+
+def _evacuation_geojson(result: dict) -> dict:
+    """LineString per evacuation route (origin -> egress), safest flagged."""
+    features = []
+    for route in result.get("routes", []):
+        steps = route.get("steps") or []
+        coordinates = [[step["lon"], step["lat"]] for step in steps]
+        destination = route.get("destination") or {}
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": coordinates},
+                "properties": {
+                    "rank": route.get("rank"),
+                    "recommended": route.get("recommended"),
+                    "compass": destination.get("compass"),
+                    "destination_name": destination.get("name"),
+                    "destination_kind": destination.get("kind"),
+                    "distance_km": route.get("distance_km"),
+                    "route_risk_score_mean": route.get("route_risk_score_mean"),
+                    "route_risk_score_max": route.get("route_risk_score_max"),
+                    "route_risk_level": route.get("route_risk_level"),
+                    "high_risk_fraction": route.get("high_risk_fraction"),
+                },
+            }
+        )
+    return {
+        "type": "FeatureCollection",
+        "mode": result.get("mode"),
+        "target": result.get("target"),
+        "recommended_index": result.get("recommended_index"),
         "features": features,
     }
 
@@ -1258,6 +1293,117 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 "accessible route.",
             ],
         }
+
+    @router.get(
+        "/emergency/evacuate",
+        response_model=None,
+        summary="Rank the safest evacuation routes out of a location",
+    )
+    def evacuate(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+        mode: str = Query("climatology", description="'climatology' or 'live'"),
+        target: str = Query(
+            "compass", description="'compass' (fan of headings) or 'facilities' (toward safe points)"
+        ),
+        distance_km: float = Query(
+            25.0, ge=1.0, le=200.0, description="egress distance for compass headings (km)"
+        ),
+        facility_kind: str | None = Query(
+            None, description="facilities target: filter kind (hospital/fire_station/emergency_shelter)"
+        ),
+        facility_count: int = Query(3, ge=1, le=10, description="facilities target: how many"),
+        facility_radius_km: float = Query(
+            100.0, gt=0.0, le=200.0, description="facilities target: only within this radius (km)"
+        ),
+        rank_by: str = Query("mean", description="rank by 'mean' or 'max' route risk"),
+        sample_spacing_km: float = Query(2.0, gt=0.0, le=50.0),
+        day_of_week: int = Query(1, ge=1, le=7),
+        hour: int = Query(0, ge=0, le=23),
+        month: int = Query(1, ge=1, le=12),
+        forecast_hours: int = Query(0, ge=0, le=48),
+        provider: str = Query("auto"),
+        output_format: str = Query("json", alias="format", description="'json' or 'geojson'"),
+    ):
+        mode_norm = mode.strip().lower()
+        if mode_norm not in {"climatology", "live"}:
+            raise HTTPException(status_code=422, detail="mode must be 'climatology' or 'live'")
+        target_norm = target.strip().lower()
+        if target_norm not in {"compass", "facilities"}:
+            raise HTTPException(status_code=422, detail="target must be 'compass' or 'facilities'")
+        if rank_by.strip().lower() not in {"mean", "max"}:
+            raise HTTPException(status_code=422, detail="rank_by must be 'mean' or 'max'")
+        fmt = output_format.strip().lower()
+        if fmt not in {"json", "geojson"}:
+            raise HTTPException(status_code=422, detail="format must be 'json' or 'geojson'")
+        if mode_norm == "live":
+            _validate_provider(provider)
+
+        if target_norm == "facilities":
+            kind_norm = facility_kind.strip().lower() if facility_kind and facility_kind.strip() else None
+            if kind_norm is not None and kind_norm not in facilities.FACILITY_KINDS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"facility_kind must be one of {list(facilities.FACILITY_KINDS)}",
+                )
+            # Evacuation destinations must be reachable, so bound to a radius (the
+            # nearest facility could otherwise be across the country).
+            within = deps.facility_provider().within_radius(
+                lat, lon, facility_radius_km, kind=kind_norm
+            )
+            destinations = within[:facility_count]
+            if not destinations:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"no facilities within {facility_radius_km} km to evacuate toward",
+                )
+        else:
+            destinations = evacuation.candidate_destinations(lat, lon, distance_km=distance_km)
+
+        shared_cache: dict[str, dict] = {}
+
+        def _score_route_fn(points):
+            return risk_eval.score_route(
+                points,
+                mode=mode_norm,
+                predict_point=deps.predict_point,
+                predict_point_live=deps.predict_point_live,
+                h3_resolution=deps.h3_resolution,
+                sample_spacing_km=sample_spacing_km,
+                day_of_week=day_of_week,
+                hour=hour,
+                month=month,
+                forecast_hours=forecast_hours,
+                provider=provider,
+                cell_cache=shared_cache,
+            )
+
+        try:
+            result = evacuation.rank_evacuation_routes(
+                lat, lon, destinations, _score_route_fn,
+                rank_by=rank_by, include_steps=(fmt == "geojson"),
+            )
+        except (risk_eval.RouteConfigError, risk_eval.RouteTooLongError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except LiveWeatherProviderError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except requests.RequestException as exc:
+            raise HTTPException(
+                status_code=502, detail=f"weather provider request failed: {exc}"
+            ) from exc
+
+        result["mode"] = mode_norm
+        result["target"] = target_norm
+        cache_control = "no-store" if mode_norm == "live" else "public, max-age=3600"
+        if fmt == "geojson":
+            return JSONResponse(
+                content=_evacuation_geojson(result),
+                media_type="application/geo+json",
+                headers={"Cache-Control": cache_control},
+            )
+        response.headers["Cache-Control"] = cache_control
+        return result
 
     @router.get(
         "/hazards/sun-glare",

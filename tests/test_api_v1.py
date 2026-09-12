@@ -433,6 +433,77 @@ def test_v1_nearest_facility_radius_and_bad_kind():
     ).status_code == 422
 
 
+def test_v1_evacuate_compass_climatology():
+    client = TestClient(MODULE.api)
+    payload = client.get(
+        "/v1/emergency/evacuate?lat=34.05&lon=-118.24&distance_km=20&day_of_week=5&hour=17"
+    ).json()
+    assert payload["mode"] == "climatology" and payload["target"] == "compass"
+    assert payload["count"] == 8
+    routes = payload["routes"]
+    means = [r["route_risk_score_mean"] for r in routes]
+    assert means == sorted(means)  # safest first
+    assert routes[0]["recommended"] is True and payload["recommended_index"] == 0
+    assert routes[0]["destination"]["compass"] in {"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
+
+
+def test_v1_evacuate_toward_facilities():
+    client = TestClient(MODULE.api)
+    payload = client.get(
+        "/v1/emergency/evacuate?lat=34.05&lon=-118.24&target=facilities&facility_kind=hospital&facility_count=3"
+    ).json()
+    assert payload["target"] == "facilities"
+    assert 1 <= payload["count"] <= 3
+    # Destinations carry facility identity.
+    assert all(r["destination"].get("kind") == "hospital" for r in payload["routes"])
+    assert payload["routes"][0]["destination"].get("name")
+
+
+def test_v1_evacuate_geojson():
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/emergency/evacuate?lat=34.05&lon=-118.24&format=geojson")
+    assert response.headers["content-type"].startswith("application/geo+json")
+    payload = response.json()
+    assert payload["type"] == "FeatureCollection"
+    feature = payload["features"][0]
+    assert feature["geometry"]["type"] == "LineString"
+    assert len(feature["geometry"]["coordinates"]) >= 2
+    assert "recommended" in feature["properties"]
+
+
+def test_v1_evacuate_validation():
+    client = TestClient(MODULE.api)
+    assert client.get("/v1/emergency/evacuate?lat=34&lon=-118&mode=x").status_code == 422
+    assert client.get("/v1/emergency/evacuate?lat=34&lon=-118&target=x").status_code == 422
+    assert client.get("/v1/emergency/evacuate?lat=34&lon=-118&rank_by=x").status_code == 422
+    assert client.get(
+        "/v1/emergency/evacuate?lat=34&lon=-118&target=facilities&facility_kind=zoo"
+    ).status_code == 422
+    # A bad format is a 422 even when the facilities lookup would otherwise 404.
+    assert client.get(
+        "/v1/emergency/evacuate?lat=0&lon=0&target=facilities&facility_radius_km=1&format=xml"
+    ).status_code == 422
+
+
+def test_v1_evacuate_live(monkeypatch):
+    snapshot = SimpleNamespace(
+        provider="nws", provider_label="NWS", observed_or_forecast="observation",
+        timestamp_local=datetime(2024, 9, 6, 17, 0, tzinfo=timezone.utc),
+        forecast_hours=0, temp_c=18.0, dewpoint_c=12.0, relative_humidity_pct=70.0,
+        wind_speed_mps=6.0, wet_hour=0.0, summary="Clear",
+    )
+    import predict
+
+    monkeypatch.setattr(predict, "fetch_live_weather", lambda **kwargs: snapshot)
+    client = TestClient(MODULE.api)
+    response = client.get(
+        "/v1/emergency/evacuate?lat=34.05&lon=-118.24&mode=live&distance_km=10"
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["count"] == 8
+
+
 def test_v1_meta_includes_model_metrics():
     client = TestClient(MODULE.api)
     payload = client.get("/v1/meta").json()
