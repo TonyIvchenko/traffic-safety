@@ -1406,6 +1406,70 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         return result
 
     @router.get(
+        "/emergency/readiness",
+        summary="Evacuation readiness for a metro region (conditions + facility coverage)",
+    )
+    def emergency_readiness(
+        response: Response,
+        region: str | None = Query(None, description="region id (see /v1/meta)"),
+        lat: float | None = Query(None, ge=-90.0, le=90.0, description="resolve region by point"),
+        lon: float | None = Query(None, ge=-180.0, le=180.0, description="resolve region by point"),
+        day_of_week: int = Query(1, ge=1, le=7, description="Monday=1..Sunday=7"),
+        hour: int = Query(0, ge=0, le=23, description="local hour 0-23"),
+        month: int = Query(1, ge=1, le=12, description="month 1-12"),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        if region is not None and region.strip():
+            resolved = regions.get_region(region)
+            resolved_by = "id"
+            if resolved is None:
+                raise HTTPException(status_code=404, detail=f"unknown region: {region}")
+        elif lat is not None and lon is not None:
+            resolved = regions.region_for_point(lat, lon)
+            resolved_by = "point"
+            if resolved is None:
+                raise HTTPException(status_code=404, detail="no metro region covers that point")
+        else:
+            raise HTTPException(status_code=422, detail="provide a region id or both lat and lon")
+
+        frame_idx = (day_of_week - 1) * 24 + hour
+        frame_label = (
+            deps.frame_labels[frame_idx]
+            if 0 <= frame_idx < len(deps.frame_labels)
+            else str(frame_idx)
+        )
+        profile = deps.region_weekly_profile_provider(resolved["id"], month)
+        value = profile[frame_idx] if 0 <= frame_idx < len(profile) else 0.0
+        advisory_block = advisory.relative_advisory(value, profile)
+        advisory_block["message"] = advisory_messages.compose(
+            advisory_block, location_name=resolved["name"], frame_idx=frame_idx
+        )
+
+        store = deps.facility_provider()
+        bbox = resolved["bbox"]
+        counts = {kind: len(store.within_bbox(bbox, kind=kind)) for kind in facilities.FACILITY_KINDS}
+        readiness = evacuation.assess_readiness(advisory_block["level_index"], counts)
+
+        return {
+            "region_id": resolved["id"],
+            "region_name": resolved["name"],
+            "bbox": list(bbox),
+            "resolved_by": resolved_by,
+            "frame_idx": frame_idx,
+            "frame_label": frame_label,
+            "advisory": advisory_block,
+            "facility_coverage": {"counts": counts, "total": sum(counts.values())},
+            "readiness": readiness,
+            "caveats": [
+                "Readiness is a screening estimate from typical (climatological) road "
+                "conditions and mapped facility coverage; use /v1/advisory/region for live "
+                "conditions.",
+                "Facility coverage reflects the curated illustrative dataset within the "
+                "region's bounding box.",
+            ],
+        }
+
+    @router.get(
         "/hazards/sun-glare",
         summary="Sun-glare assessment for a heading at a location/time",
     )

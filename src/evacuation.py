@@ -28,6 +28,60 @@ COMPASS_BEARINGS = (
 
 DEFAULT_EVAC_DISTANCE_KM = 25.0
 
+READINESS_KINDS = ("hospital", "emergency_shelter", "fire_station")
+
+
+def assess_readiness(advisory_level_index, facility_counts) -> dict:
+    """Evacuation-readiness rating from road conditions and facility coverage.
+
+    ``advisory_level_index`` is the region's advisory level (1 Low .. 5 Extreme);
+    ``facility_counts`` maps facility kind -> count within the region. "limited"
+    when no hospital is mapped or conditions are Extreme; "good" when all three
+    kinds are present and conditions are at most Moderate; else "moderate".
+    """
+    counts = facility_counts if isinstance(facility_counts, dict) else {}
+
+    def _count(kind: str) -> int:
+        try:
+            return max(0, int(counts.get(kind, 0) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    hospitals = _count("hospital")
+    shelters = _count("emergency_shelter")
+    fire = _count("fire_station")
+    kinds_present = sum(1 for kind in READINESS_KINDS if _count(kind) > 0)
+
+    try:
+        level = int(advisory_level_index)
+    except (TypeError, ValueError):
+        level = 1
+    level = min(5, max(1, level))
+
+    reasons = []
+    if hospitals == 0:
+        reasons.append("no hospital mapped in region")
+    if shelters == 0:
+        reasons.append("no emergency shelter mapped in region")
+    if fire == 0:
+        reasons.append("no fire station mapped in region")
+    if level >= 4:
+        reasons.append("elevated road risk for this time")
+
+    if hospitals == 0 or level >= 5:
+        rating = "limited"
+    elif kinds_present == 3 and level <= 2:
+        rating = "good"
+    else:
+        rating = "moderate"
+
+    return {
+        "rating": rating,
+        "kinds_present": kinds_present,
+        "advisory_level_index": level,
+        "reasons": reasons,
+    }
+
 
 def candidate_destinations(lat, lon, *, distance_km: float = DEFAULT_EVAC_DISTANCE_KM, bearings=None) -> list[dict]:
     """Egress destinations ``distance_km`` from ``(lat, lon)`` along each bearing.

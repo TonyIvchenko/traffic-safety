@@ -95,3 +95,36 @@ def test_rank_skips_bad_summaries_and_handles_empty():
     # No destinations at all.
     empty = evacuation.rank_evacuation_routes(34.0, -118.0, [], _fake_scorer(lambda lat: 0.1))
     assert empty["count"] == 0
+
+
+def test_assess_readiness_good():
+    result = evacuation.assess_readiness(
+        2, {"hospital": 2, "emergency_shelter": 1, "fire_station": 1}
+    )
+    assert result["rating"] == "good"
+    assert result["kinds_present"] == 3
+    assert result["reasons"] == []
+
+
+def test_assess_readiness_limited_without_hospital():
+    result = evacuation.assess_readiness(1, {"emergency_shelter": 1, "fire_station": 1})
+    assert result["rating"] == "limited"
+    assert "no hospital mapped in region" in result["reasons"]
+
+
+def test_assess_readiness_limited_on_extreme_conditions():
+    result = evacuation.assess_readiness(5, {"hospital": 3, "emergency_shelter": 2, "fire_station": 2})
+    assert result["rating"] == "limited"
+    assert "elevated road risk for this time" in result["reasons"]
+
+
+def test_assess_readiness_moderate_middle_ground():
+    # Full coverage but Elevated (index 3) -> not "good", not "limited".
+    result = evacuation.assess_readiness(3, {"hospital": 1, "emergency_shelter": 1, "fire_station": 1})
+    assert result["rating"] == "moderate"
+
+
+def test_assess_readiness_defensive_inputs():
+    result = evacuation.assess_readiness(None, "not a dict")
+    assert result["advisory_level_index"] == 1
+    assert result["rating"] == "limited"  # no facilities at all

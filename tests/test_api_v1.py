@@ -504,6 +504,30 @@ def test_v1_evacuate_live(monkeypatch):
     assert response.json()["count"] == 8
 
 
+def test_v1_emergency_readiness_by_id():
+    client = TestClient(MODULE.api)
+    payload = client.get(
+        "/v1/emergency/readiness?region=los_angeles&day_of_week=5&hour=17"
+    ).json()
+    assert payload["region_id"] == "los_angeles"
+    assert payload["resolved_by"] == "id"
+    assert payload["advisory"]["basis"] == "relative_to_local_weekly_normal"
+    coverage = payload["facility_coverage"]
+    assert set(coverage["counts"]) == {"hospital", "fire_station", "emergency_shelter"}
+    assert coverage["total"] == sum(coverage["counts"].values())
+    assert coverage["counts"]["hospital"] >= 1  # LA has mapped hospitals
+    assert payload["readiness"]["rating"] in {"good", "moderate", "limited"}
+
+
+def test_v1_emergency_readiness_by_point_and_errors():
+    client = TestClient(MODULE.api)
+    by_point = client.get("/v1/emergency/readiness?lat=34.05&lon=-118.24").json()
+    assert by_point["region_id"] == "los_angeles" and by_point["resolved_by"] == "point"
+    assert client.get("/v1/emergency/readiness").status_code == 422  # no selector
+    assert client.get("/v1/emergency/readiness?region=atlantis").status_code == 404
+    assert client.get("/v1/emergency/readiness?lat=0&lon=0").status_code == 404
+
+
 def test_v1_meta_includes_model_metrics():
     client = TestClient(MODULE.api)
     payload = client.get("/v1/meta").json()
