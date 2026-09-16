@@ -60,6 +60,17 @@ def test_v1_meta_describes_advisory_scale():
     assert "/v1/advisory/national" in advisory_meta["endpoints"]
 
 
+def test_v1_meta_describes_emergency():
+    client = TestClient(MODULE.api)
+    emergency = client.get("/v1/meta").json()["emergency"]
+    assert emergency["enabled"] is True
+    assert set(emergency["facility_kinds"]) == {"hospital", "fire_station", "emergency_shelter"}
+    assert emergency["facility_count"] >= 15
+    assert set(emergency["readiness_ratings"]) == {"good", "moderate", "limited"}
+    assert "/v1/emergency/evacuate" in emergency["endpoints"]
+    assert "/v1/emergency/readiness" in emergency["endpoints"]
+
+
 def test_v1_point_climatology():
     client = TestClient(MODULE.api)
     response = client.get(

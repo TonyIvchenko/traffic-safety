@@ -871,6 +871,29 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "locations fall back to an absolute scale."
                 ),
             },
+            "emergency": {
+                "enabled": True,
+                "facility_kinds": list(facilities.FACILITY_KINDS),
+                "facility_count": len(deps.facility_provider()),
+                "readiness_ratings": {
+                    "good": "full facility coverage and at most moderate typical conditions",
+                    "moderate": "partial coverage or elevated typical conditions",
+                    "limited": "no hospital mapped, or extreme typical conditions",
+                },
+                "endpoints": [
+                    "/v1/emergency/nearest-facility",
+                    "/v1/emergency/evacuate",
+                    "/v1/emergency/readiness",
+                ],
+                "formats": ["json", "geojson"],
+                "note": (
+                    "Evacuation support: nearest critical facilities (hospitals, fire "
+                    "stations, shelters), safest egress routing (compass fan or toward "
+                    "facilities, live storm scenarios via forecast_hours), and per-region "
+                    "readiness. Facilities are a curated illustrative sample; distances "
+                    "are straight-line."
+                ),
+            },
             "docs_url": "/v1/docs",
         }
 
