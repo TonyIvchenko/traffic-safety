@@ -400,6 +400,64 @@ instead of paying the first-request cost.
 - Regions are approximate metro bounding boxes for screening, **not** official
   MSA boundaries. The advisory is guidance, not a guarantee of safety.
 
+## Emergency Response & Evacuation
+
+Evacuation support layered on the risk model: locate the nearest points of safety,
+rank the safest way out under current or forecast conditions, and summarize a
+metro's evacuation readiness.
+
+Critical facilities (hospitals, fire stations, emergency shelters) live in
+[data/reference/critical_facilities.json](data/reference/critical_facilities.json)
+— a curated illustrative sample. Replace it with an authoritative feed
+(HIFLD, OpenStreetMap) via `scripts/download_facilities.py`; the runtime reads a
+processed parquet or the reference file (override with
+`TRAFFIC_SAFETY_FACILITIES_PATH`).
+
+### Serve the analysis (`/v1/emergency`)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /v1/emergency/nearest-facility` | Nearest hospitals/shelters/fire stations to a point (`kind`, `k`, `max_km`) with distance + bearing |
+| `GET /v1/emergency/evacuate` | Rank the safest egress routes — `target=compass` (fan of headings) or `target=facilities` (toward nearby safe points); climatology or live (`forecast_hours` for storm scenarios); JSON or `?format=geojson` |
+| `GET /v1/emergency/readiness` | Per-region readiness: typical conditions + facility coverage + a good/moderate/limited rating (`region=<id>` or `lat`+`lon`) |
+
+```bash
+# Nearest hospital to a point
+curl "http://127.0.0.1:8080/v1/emergency/nearest-facility?lat=34.05&lon=-118.24&kind=hospital"
+
+# Safest way out right now, storm 6h ahead, as GeoJSON routes
+curl "http://127.0.0.1:8080/v1/emergency/evacuate?lat=34.05&lon=-118.24&mode=live&forecast_hours=6&format=geojson"
+
+# Evacuate toward the nearest shelters instead of a compass fan
+curl "http://127.0.0.1:8080/v1/emergency/evacuate?lat=34.05&lon=-118.24&target=facilities&facility_kind=emergency_shelter"
+
+# A metro's evacuation readiness for Friday 5pm
+curl "http://127.0.0.1:8080/v1/emergency/readiness?region=los_angeles&day_of_week=5&hour=17"
+```
+
+The `meta.emergency` block at `/v1/meta` lists the facility kinds, endpoints, and
+readiness-rating definitions.
+
+### Precompute a snapshot (offline)
+
+```bash
+conda run -n playground python scripts/build_emergency_snapshot.py --month 1 --day-of-week 5 --hour 17
+```
+
+Writes a national readiness table (JSON + GeoJSON), regions ranked least-ready
+first, to `data/emergency/`.
+
+### Methodology & caveats
+
+- Facilities are a **curated illustrative sample** with approximate coordinates —
+  swap in an authoritative feed before operational use.
+- Distances are **straight-line** (great-circle), not drive time or an accessible
+  route; egress routes are scored along a direct origin→destination line, not a
+  real road network.
+- Readiness is a **screening** estimate from typical (climatological) conditions
+  and mapped coverage; use `/v1/advisory/region` for live conditions. It is
+  decision support, not an operational evacuation plan.
+
 ## Recommended Shape
 
 The most practical nationwide design is a two-layer system:
