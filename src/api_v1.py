@@ -20,9 +20,11 @@ import requests
 
 import advisory
 import advisory_messages
+import datasets as datasets_catalog
 import evacuation
 import facilities
 import grant_html
+import source_catalog
 from live_weather import LiveWeatherProviderError
 import region_index
 import regions
@@ -1491,6 +1493,27 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 "region's bounding box.",
             ],
         }
+
+    @router.get("/datasets", summary="Catalog of open datasets produced by this service")
+    def list_datasets(response: Response) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        enriched = [
+            source_catalog.dataset_provenance(dataset)
+            for dataset in datasets_catalog.list_datasets()
+        ]
+        return {
+            "count": len(enriched),
+            "formats": sorted({fmt for dataset in enriched for fmt in dataset["formats"]}),
+            "datasets": enriched,
+        }
+
+    @router.get("/datasets/{dataset_id}", summary="One open dataset with resolved provenance")
+    def get_dataset(response: Response, dataset_id: str) -> dict:
+        dataset = datasets_catalog.get_dataset(dataset_id)
+        if dataset is None:
+            raise HTTPException(status_code=404, detail=f"unknown dataset: {dataset_id}")
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        return source_catalog.dataset_provenance(dataset)
 
     @router.get(
         "/hazards/sun-glare",

@@ -60,6 +60,27 @@ def test_v1_meta_describes_advisory_scale():
     assert "/v1/advisory/national" in advisory_meta["endpoints"]
 
 
+def test_v1_datasets_catalog():
+    client = TestClient(MODULE.api)
+    payload = client.get("/v1/datasets").json()
+    assert payload["count"] == len(payload["datasets"]) and payload["count"] >= 6
+    assert "geojson" in payload["formats"]
+    hin = next(d for d in payload["datasets"] if d["id"] == "high_injury_network")
+    # Provenance resolved to full source records.
+    assert all(isinstance(s, dict) and "id" in s for s in hin["sources"])
+    assert any(s["id"] == "fars" and "url" in s for s in hin["sources"])
+
+
+def test_v1_dataset_by_id():
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/datasets/equity_overlay")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "equity_overlay"
+    assert response.headers["cache-control"] == "public, max-age=3600"
+    assert client.get("/v1/datasets/nope").status_code == 404
+
+
 def test_v1_meta_describes_emergency():
     client = TestClient(MODULE.api)
     emergency = client.get("/v1/meta").json()["emergency"]
