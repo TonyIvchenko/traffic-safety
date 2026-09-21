@@ -81,6 +81,61 @@ def test_v1_dataset_by_id():
     assert client.get("/v1/datasets/nope").status_code == 404
 
 
+def test_v1_dataset_download_json():
+    client = TestClient(MODULE.api)
+    payload = client.get("/v1/datasets/critical_facilities/download").json()
+    assert payload["dataset"] == "critical_facilities"
+    assert payload["count"] == len(payload["records"]) and payload["count"] >= 15
+    assert all("lat" in r and "kind" in r for r in payload["records"])
+
+
+def test_v1_dataset_download_geojson_and_csv():
+    client = TestClient(MODULE.api)
+    geo = client.get("/v1/datasets/critical_facilities/download?format=geojson")
+    assert geo.headers["content-type"].startswith("application/geo+json")
+    gj = geo.json()
+    assert gj["type"] == "FeatureCollection" and gj["count"] >= 15
+    assert gj["features"][0]["geometry"]["type"] == "Point"
+
+    csv_resp = client.get("/v1/datasets/critical_facilities/download?format=csv")
+    assert csv_resp.headers["content-type"].startswith("text/csv")
+    assert "attachment" in csv_resp.headers.get("content-disposition", "")
+    lines = csv_resp.text.strip().splitlines()
+    assert lines[0].split(",")[0] == "id"  # header
+    assert len(lines) - 1 >= 15  # data rows
+
+
+def test_v1_dataset_download_errors():
+    client = TestClient(MODULE.api)
+    assert client.get("/v1/datasets/nope/download").status_code == 404
+    assert client.get(
+        "/v1/datasets/critical_facilities/download?format=xml"
+    ).status_code == 422
+    # Query-scoped dataset -> 422 pointing at its serving endpoints.
+    resp = client.get("/v1/datasets/high_injury_network/download")
+    assert resp.status_code == 422
+    assert "query-scoped" in resp.json()["detail"]
+
+
+def test_v1_dataset_download_csv_sanitizes_formula_injection(tmp_path, monkeypatch):
+    import json as _json
+
+    path = tmp_path / "facilities.json"
+    path.write_text(
+        _json.dumps(
+            {"facilities": [
+                {"id": "x", "name": "=SUM(A1)", "kind": "hospital", "lat": 34.0, "lon": -118.0}
+            ]}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TRAFFIC_SAFETY_FACILITIES_PATH", str(path))
+    client = TestClient(MODULE.api)
+    text = client.get("/v1/datasets/critical_facilities/download?format=csv").text
+    # The formula-leading name is quoted so a spreadsheet won't execute it.
+    assert "'=SUM(A1)" in text
+
+
 def test_v1_meta_describes_emergency():
     client = TestClient(MODULE.api)
     emergency = client.get("/v1/meta").json()["emergency"]

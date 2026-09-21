@@ -8,8 +8,11 @@ its already-loaded model/overlay/provider objects and includes the router.
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import io
+import json
 import math
 from typing import Callable, Sequence
 
@@ -384,6 +387,65 @@ def _advisory_drivers(result) -> list[str]:
         if text:
             drivers.append(_HAZARD_DRIVER_PHRASES.get(text, text))
     return drivers
+
+
+# Leading characters a spreadsheet may interpret as a formula (CSV injection).
+_CSV_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value):
+    """Neutralize CSV formula injection by quoting a formula-leading string cell."""
+    if isinstance(value, str) and value[:1] in _CSV_INJECTION_PREFIXES:
+        return "'" + value
+    return value
+
+
+def _records_to_csv(records: list[dict]) -> str:
+    """Flatten a list of record dicts to CSV; nested values are JSON-encoded."""
+    if not records:
+        return ""
+    fields: list[str] = []
+    seen: set = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for key in record:
+            if key not in seen:
+                seen.add(key)
+                fields.append(key)
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        row = {
+            key: (json.dumps(value) if isinstance(value, (dict, list)) else _csv_safe(value))
+            for key, value in record.items()
+        }
+        writer.writerow(row)
+    return buffer.getvalue()
+
+
+def _records_to_geojson(records: list[dict]) -> dict:
+    """Point FeatureCollection from records carrying ``lat``/``lon`` (others skipped)."""
+    features = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        lat = _safe_float(record.get("lat"))
+        lon = _safe_float(record.get("lon"))
+        if lat is None or lon is None:
+            continue
+        properties = {key: value for key, value in record.items() if key not in ("lat", "lon")}
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": properties,
+            }
+        )
+    return {"type": "FeatureCollection", "count": len(features), "features": features}
 
 
 def _advisory_national_geojson(regions_indexed: list[dict], geometry_kind: str) -> dict:
@@ -1514,6 +1576,60 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"unknown dataset: {dataset_id}")
         response.headers["Cache-Control"] = "public, max-age=3600"
         return source_catalog.dataset_provenance(dataset)
+
+    # Datasets that are fully materialized collections (served from a provider, not
+    # a query-scoped endpoint) can be bulk-downloaded. Others are query-scoped and
+    # are fetched through their serving endpoints instead.
+    _bulk_downloaders = {
+        "critical_facilities": lambda: deps.facility_provider().all(),
+    }
+
+    @router.get(
+        "/datasets/{dataset_id}/download",
+        response_model=None,
+        summary="Bulk-download an open dataset (json, geojson, or csv)",
+    )
+    def download_dataset(
+        response: Response,
+        dataset_id: str,
+        output_format: str = Query("json", alias="format", description="'json', 'geojson', or 'csv'"),
+    ):
+        dataset = datasets_catalog.get_dataset(dataset_id)
+        if dataset is None:
+            raise HTTPException(status_code=404, detail=f"unknown dataset: {dataset_id}")
+        fmt = output_format.strip().lower()
+        if fmt not in {"json", "geojson", "csv"}:
+            raise HTTPException(status_code=422, detail="format must be 'json', 'geojson', or 'csv'")
+
+        downloader = _bulk_downloaders.get(dataset["id"])
+        if downloader is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"bulk download is not available for '{dataset['id']}'; it is query-scoped "
+                    f"— use its serving endpoints {dataset['endpoints']}"
+                ),
+            )
+        records = downloader()
+
+        cache_control = "public, max-age=3600"
+        if fmt == "csv":
+            return Response(
+                content=_records_to_csv(records),
+                media_type="text/csv",
+                headers={
+                    "Cache-Control": cache_control,
+                    "Content-Disposition": f'attachment; filename="{dataset["id"]}.csv"',
+                },
+            )
+        if fmt == "geojson":
+            return JSONResponse(
+                content=_records_to_geojson(records),
+                media_type="application/geo+json",
+                headers={"Cache-Control": cache_control},
+            )
+        response.headers["Cache-Control"] = cache_control
+        return {"dataset": dataset["id"], "count": len(records), "records": records}
 
     @router.get(
         "/hazards/sun-glare",
