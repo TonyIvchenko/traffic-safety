@@ -1,117 +1,69 @@
-"""Calibration and reliability metrics for probabilistic risk predictions.
+"""Pure calibration / reliability metrics for binary risk probabilities.
 
-Given ``(predicted_probability, outcome)`` pairs — outcome 0/1 — computes the
-Brier score, a reliability table (predictions binned with their observed
-frequency), and the Expected Calibration Error. These sit atop the model backtest
-so consumers can judge whether a risk score of 0.3 really means ~30% of the time.
-
-Pure and defensive: pairs with a non-numeric/out-of-range probability or a
-non-binary outcome are dropped rather than raising. Pairs may be ``(prob, outcome)``
-tuples or ``{"probability", "outcome"}`` dicts.
+NumPy-only so they can be unit-tested without the training pipeline and reused
+by scripts/evaluate_model.py.
 """
 
 from __future__ import annotations
 
-import math
+import numpy as np
 
 
-def _extract(pair):
-    if isinstance(pair, dict):
-        prob = pair.get("probability", pair.get("prob"))
-        outcome = pair.get("outcome", pair.get("label"))
-    elif isinstance(pair, (list, tuple)) and len(pair) >= 2:
-        prob, outcome = pair[0], pair[1]
-    else:
-        return None
-    try:
-        probability = float(prob)
-        observed = float(outcome)
-    except (TypeError, ValueError):
-        return None
-    if not (math.isfinite(probability) and math.isfinite(observed)):
-        return None
-    if not (0.0 <= probability <= 1.0) or observed not in (0.0, 1.0):
-        return None
-    return (probability, observed)
+def brier_score(y_true, y_prob) -> float:
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_prob = np.asarray(y_prob, dtype=np.float64)
+    if y_true.size == 0:
+        return 0.0
+    return float(np.mean((y_prob - y_true) ** 2))
 
 
-def clean_pairs(pairs) -> list[tuple]:
-    """The valid ``(probability, outcome)`` pairs (invalid ones dropped)."""
-    return [pair for pair in (_extract(item) for item in (pairs or [])) if pair is not None]
-
-
-def brier_score(pairs) -> float | None:
-    """Mean squared error of probability vs outcome; None if there are no pairs."""
-    clean = clean_pairs(pairs)
-    if not clean:
-        return None
-    return sum((probability - observed) ** 2 for probability, observed in clean) / len(clean)
-
-
-def reliability_bins(pairs, *, n_bins: int = 10) -> list[dict]:
-    """Reliability table: each equal-width probability bin with its observed rate.
-
-    Returns all ``n_bins`` bins (empty ones have count 0 and
-    ``observed_frequency``/``mean_predicted`` None), each with ``p_low``/``p_high``.
-    """
-    bins = max(1, int(n_bins))
-    clean = clean_pairs(pairs)
-    buckets: list[dict] = [
-        {
-            "bin": index,
-            "p_low": round(index / bins, 4),
-            "p_high": round((index + 1) / bins, 4),
-            "count": 0,
-            "_pred_sum": 0.0,
-            "_obs_sum": 0.0,
-        }
-        for index in range(bins)
-    ]
-    for probability, observed in clean:
-        index = min(bins - 1, int(probability * bins))
-        bucket = buckets[index]
-        bucket["count"] += 1
-        bucket["_pred_sum"] += probability
-        bucket["_obs_sum"] += observed
-
-    table = []
-    for bucket in buckets:
-        count = bucket["count"]
-        table.append(
+def reliability_bins(y_true, y_prob, n_bins: int = 10) -> list[dict]:
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_prob = np.asarray(y_prob, dtype=np.float64)
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    bins: list[dict] = []
+    for index in range(n_bins):
+        lower, upper = float(edges[index]), float(edges[index + 1])
+        if index == n_bins - 1:
+            mask = (y_prob >= lower) & (y_prob <= upper)
+        else:
+            mask = (y_prob >= lower) & (y_prob < upper)
+        count = int(mask.sum())
+        bins.append(
             {
-                "bin": bucket["bin"],
-                "p_low": bucket["p_low"],
-                "p_high": bucket["p_high"],
+                "bin_lower": lower,
+                "bin_upper": upper,
                 "count": count,
-                "mean_predicted": round(bucket["_pred_sum"] / count, 4) if count else None,
-                "observed_frequency": round(bucket["_obs_sum"] / count, 4) if count else None,
+                "mean_predicted": float(y_prob[mask].mean()) if count else None,
+                "mean_observed": float(y_true[mask].mean()) if count else None,
             }
         )
-    return table
+    return bins
 
 
-def calibration_error(pairs, *, n_bins: int = 10) -> float | None:
-    """Expected Calibration Error: count-weighted mean |predicted - observed|."""
-    clean = clean_pairs(pairs)
-    if not clean:
-        return None
-    total = len(clean)
-    error = 0.0
-    for bucket in reliability_bins(clean, n_bins=n_bins):
+def expected_calibration_error(y_true, y_prob, n_bins: int = 10) -> float:
+    y_true = np.asarray(y_true, dtype=np.float64)
+    total = y_true.size
+    if total == 0:
+        return 0.0
+    ece = 0.0
+    for bucket in reliability_bins(y_true, y_prob, n_bins):
         if bucket["count"]:
-            error += (bucket["count"] / total) * abs(
-                bucket["mean_predicted"] - bucket["observed_frequency"]
+            ece += (bucket["count"] / total) * abs(
+                bucket["mean_observed"] - bucket["mean_predicted"]
             )
-    return error
+    return float(ece)
 
 
-def reliability_report(pairs, *, n_bins: int = 10) -> dict:
-    """A combined report: sample count, Brier score, ECE, and the reliability table."""
-    clean = clean_pairs(pairs)
+def summarize(y_true, y_prob, n_bins: int = 10) -> dict:
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_prob = np.asarray(y_prob, dtype=np.float64)
+    count = int(y_true.size)
     return {
-        "count": len(clean),
-        "brier_score": brier_score(clean),
-        "calibration_error": calibration_error(clean, n_bins=n_bins),
-        "n_bins": max(1, int(n_bins)),
-        "bins": reliability_bins(clean, n_bins=n_bins),
+        "count": count,
+        "positive_rate": float(y_true.mean()) if count else 0.0,
+        "mean_predicted": float(y_prob.mean()) if count else 0.0,
+        "brier_score": brier_score(y_true, y_prob),
+        "ece": expected_calibration_error(y_true, y_prob, n_bins),
+        "reliability_bins": reliability_bins(y_true, y_prob, n_bins),
     }
