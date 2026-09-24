@@ -83,3 +83,11 @@ def test_validate_dataset_dispatch():
 def test_empty_records():
     report = validation.validate_records([], validation.FACILITY_SCHEMA)
     assert report["ok"] is True and report["record_count"] == 0
+
+
+def test_overflowing_int_is_not_finite_not_a_crash():
+    # A JSON integer too large to become a float must degrade, not raise.
+    records = [{"id": "x", "name": "X", "kind": "hospital", "lat": 0.0, "lon": 0.0, "capacity": 10**400}]
+    report = validation.validate_records(records, validation.FACILITY_SCHEMA)
+    assert report["codes"]["not_finite"] == 1
+    assert report["ok"] is False

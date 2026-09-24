@@ -28,6 +28,7 @@ import evacuation
 import facilities
 import grant_html
 import source_catalog
+import validation
 from live_weather import LiveWeatherProviderError
 import region_index
 import regions
@@ -191,6 +192,14 @@ class WatchCreateRequest(BaseModel):
 
 class WatchUpdateRequest(BaseModel):
     active: bool
+
+
+class ValidationRequest(BaseModel):
+    dataset: str
+    records: list[dict] = Field(default_factory=list)
+
+
+MAX_VALIDATION_RECORDS = 50000
 
 
 @dataclass
@@ -1630,6 +1639,28 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             )
         response.headers["Cache-Control"] = cache_control
         return {"dataset": dataset["id"], "count": len(records), "records": records}
+
+    @router.post(
+        "/validation/data",
+        summary="Validate a dropped-in dataset against its schema",
+    )
+    def validate_data(response: Response, body: ValidationRequest) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        schema = validation.schema_for(body.dataset)
+        if schema is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"no validation schema for '{body.dataset}'; "
+                    f"available: {sorted(validation.SCHEMAS)}"
+                ),
+            )
+        if len(body.records) > MAX_VALIDATION_RECORDS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"too many records ({len(body.records)}); max {MAX_VALIDATION_RECORDS}",
+            )
+        return validation.validate_dataset(body.dataset, body.records)
 
     @router.get(
         "/hazards/sun-glare",

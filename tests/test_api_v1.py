@@ -136,6 +136,62 @@ def test_v1_dataset_download_csv_sanitizes_formula_injection(tmp_path, monkeypat
     assert "'=SUM(A1)" in text
 
 
+def test_v1_validation_data_ok():
+    client = TestClient(MODULE.api)
+    body = {
+        "dataset": "critical_facilities",
+        "records": [
+            {"id": "a", "name": "A", "kind": "hospital", "lat": 34.0, "lon": -118.0},
+            {"id": "b", "name": "B", "kind": "fire_station", "lat": 40.0, "lon": -74.0},
+        ],
+    }
+    payload = client.post("/v1/validation/data", json=body).json()
+    assert payload["ok"] is True
+    assert payload["dataset"] == "critical_facilities"
+    assert payload["record_count"] == 2 and payload["issue_count"] == 0
+
+
+def test_v1_validation_data_reports_issues():
+    client = TestClient(MODULE.api)
+    body = {
+        "dataset": "critical_facilities",
+        "records": [
+            {"name": "no id", "kind": "zoo", "lat": 999.0, "lon": -118.0},
+        ],
+    }
+    payload = client.post("/v1/validation/data", json=body).json()
+    assert payload["ok"] is False
+    assert payload["codes"]["missing"] >= 1  # id
+    assert payload["codes"]["choice"] >= 1  # kind
+    assert payload["codes"]["range"] >= 1  # lat
+
+
+def test_v1_validation_data_unknown_dataset():
+    client = TestClient(MODULE.api)
+    resp = client.post("/v1/validation/data", json={"dataset": "made_up", "records": []})
+    assert resp.status_code == 422
+    assert "available" in resp.json()["detail"]
+
+
+def test_v1_validation_data_too_many_records():
+    client = TestClient(MODULE.api)
+    body = {"dataset": "critical_facilities", "records": [{} for _ in range(60000)]}
+    assert client.post("/v1/validation/data", json=body).status_code == 422
+
+
+def test_v1_validation_data_huge_int_degrades_not_500():
+    client = TestClient(MODULE.api)
+    body = {
+        "dataset": "critical_facilities",
+        "records": [
+            {"id": "x", "name": "X", "kind": "hospital", "lat": 0.0, "lon": 0.0, "capacity": 10**400}
+        ],
+    }
+    response = client.post("/v1/validation/data", json=body)
+    assert response.status_code == 200  # not a 500
+    assert response.json()["codes"]["not_finite"] == 1
+
+
 def test_v1_meta_describes_emergency():
     client = TestClient(MODULE.api)
     emergency = client.get("/v1/meta").json()["emergency"]

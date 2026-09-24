@@ -62,7 +62,9 @@ def _is_type(value, type_name: str) -> bool:
 def _finite(value) -> bool:
     try:
         return math.isfinite(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: an arbitrary-precision int too large to become a float
+        # (untrusted JSON can supply one) — treat as non-finite, not a crash.
         return False
 
 
