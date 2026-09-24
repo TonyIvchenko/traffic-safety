@@ -967,6 +967,32 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "are straight-line."
                 ),
             },
+            "datasets": {
+                "enabled": True,
+                "count": len(datasets_catalog.DATASETS),
+                "formats": sorted(
+                    {fmt for dataset in datasets_catalog.DATASETS for fmt in dataset["formats"]}
+                ),
+                "endpoints": [
+                    "/v1/datasets",
+                    "/v1/datasets/{id}",
+                    "/v1/datasets/{id}/download",
+                ],
+                "note": (
+                    "Open catalog of the model/analysis outputs with upstream provenance; "
+                    "materialized datasets support bulk download (json/geojson/csv)."
+                ),
+            },
+            "validation": {
+                "enabled": True,
+                "data_endpoint": "/v1/validation/data",
+                "model_report": "/v1/model/report",
+                "schemas": sorted(validation.SCHEMAS),
+                "note": (
+                    "POST records to /v1/validation/data to check them against a dataset "
+                    "schema; model calibration and backtest are at /v1/model/report."
+                ),
+            },
             "docs_url": "/v1/docs",
         }
 

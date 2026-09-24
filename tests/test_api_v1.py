@@ -203,6 +203,19 @@ def test_v1_meta_describes_emergency():
     assert "/v1/emergency/readiness" in emergency["endpoints"]
 
 
+def test_v1_meta_describes_datasets_and_validation():
+    client = TestClient(MODULE.api)
+    meta = client.get("/v1/meta").json()
+    ds = meta["datasets"]
+    assert ds["enabled"] is True and ds["count"] >= 6
+    assert "geojson" in ds["formats"]
+    assert "/v1/datasets/{id}/download" in ds["endpoints"]
+    val = meta["validation"]
+    assert val["data_endpoint"] == "/v1/validation/data"
+    assert val["model_report"] == "/v1/model/report"
+    assert "critical_facilities" in val["schemas"]
+
+
 def test_v1_point_climatology():
     client = TestClient(MODULE.api)
     response = client.get(
