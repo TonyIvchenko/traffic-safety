@@ -458,6 +458,58 @@ first, to `data/emergency/`.
   and mapped coverage; use `/v1/advisory/region` for live conditions. It is
   decision support, not an operational evacuation plan.
 
+## Open Data & Validation
+
+The model/analysis outputs are published as an open catalog with upstream
+provenance, bulk download in open formats, and tooling to validate data before
+it is dropped in — plus the model's own calibration backtest.
+
+### Dataset catalog & download (`/v1/datasets`)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /v1/datasets` | Catalog of open datasets (HIN, equity, grants, countermeasures, risk overlay, advisory + emergency snapshots, facilities) — formats, serving endpoints, and provenance resolved against [source_catalog.json](source_catalog.json) |
+| `GET /v1/datasets/{id}` | One dataset with resolved source records |
+| `GET /v1/datasets/{id}/download` | Bulk-download a materialized dataset (`?format=json\|geojson\|csv`) |
+
+```bash
+# Browse the catalog with provenance
+curl "http://127.0.0.1:8080/v1/datasets"
+
+# Download the critical-facilities dataset as CSV
+curl "http://127.0.0.1:8080/v1/datasets/critical_facilities/download?format=csv"
+```
+
+Datasets served through query-scoped endpoints (e.g. the HIN by GEOID/bbox, the
+risk overlay by bbox) are fetched through those endpoints; the download route
+returns a `422` naming them rather than dumping an unbounded response.
+
+### Validation (`/v1/validation`, `/v1/model/report`)
+
+| Method & path | Purpose |
+|---|---|
+| `POST /v1/validation/data` | Validate records against a dataset schema — reports missing/type/range/allowed-value/duplicate/non-finite issues before you drop a file in |
+| `GET /v1/model/report` | Model calibration & backtest (Brier score, reliability bins, expected calibration error) |
+
+```bash
+# Vet a replacement facilities file before deploying it
+curl -X POST "http://127.0.0.1:8080/v1/validation/data" \
+  -H 'content-type: application/json' \
+  -d '{"dataset":"critical_facilities","records":[{"id":"h1","name":"Test","kind":"hospital","lat":34.0,"lon":-118.0}]}'
+```
+
+The `meta.datasets` and `meta.validation` blocks at `/v1/meta` list the catalog
+size, formats, available validation schemas, and these endpoints.
+
+### Notes & caveats
+
+- CSV exports quote formula-leading cells (`= + - @`) to prevent spreadsheet
+  formula injection.
+- Provenance references resolve to `source_catalog.json`; verify each upstream
+  source's license before redistribution.
+- Validation is schema-level (types, ranges, allowed values, uniqueness) — it
+  checks structure, not semantic accuracy.
+
 ## Recommended Shape
 
 The most practical nationwide design is a two-layer system:
