@@ -166,6 +166,20 @@ def test_v1_validation_data_reports_issues():
     assert payload["codes"]["range"] >= 1  # lat
 
 
+def test_v1_validation_data_high_injury_network():
+    client = TestClient(MODULE.api)
+    body = {
+        "dataset": "high_injury_network",
+        "records": [
+            {"segment_id": "s1", "center_lat": 34.0, "center_lon": -118.0, "fatal_crashes": 2.0},
+            {"segment_id": "s2", "center_lat": 999.0, "center_lon": -118.0},  # bad lat
+        ],
+    }
+    payload = client.post("/v1/validation/data", json=body).json()
+    assert payload["dataset"] == "high_injury_network"
+    assert payload["codes"]["range"] == 1
+
+
 def test_v1_validation_data_unknown_dataset():
     client = TestClient(MODULE.api)
     resp = client.post("/v1/validation/data", json={"dataset": "made_up", "records": []})

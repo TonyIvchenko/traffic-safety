@@ -32,8 +32,26 @@ FACILITY_SCHEMA = (
     {"name": "trauma_center", "type": "bool", "required": False},
 )
 
+# The High Injury Network / countermeasure segment file (see countermeasures
+# _SEGMENT_FIELDS). Numeric columns use the "float" check so a valid 2.0 from
+# parquet isn't flagged as a non-int; segment_id and the centroid are required.
+HIN_SEGMENT_SCHEMA = (
+    {"name": "segment_id", "type": "str", "required": True, "unique": True},
+    {"name": "fullname", "type": "str", "required": False},
+    {"name": "mtfcc", "type": "str", "required": False},
+    {"name": "rttyp", "type": "str", "required": False},
+    {"name": "length_km", "type": "float", "required": False, "min": 0.0},
+    {"name": "center_lat", "type": "float", "required": True, "min": -90.0, "max": 90.0},
+    {"name": "center_lon", "type": "float", "required": True, "min": -180.0, "max": 180.0},
+    {"name": "fatal_crashes", "type": "float", "required": False, "min": 0.0},
+    {"name": "hin_rank", "type": "float", "required": False, "min": 1.0},
+    {"name": "rur_urb", "type": "float", "required": False},
+    {"name": "func_sys", "type": "float", "required": False},
+)
+
 SCHEMAS = {
     "critical_facilities": FACILITY_SCHEMA,
+    "high_injury_network": HIN_SEGMENT_SCHEMA,
 }
 
 

@@ -85,6 +85,42 @@ def test_empty_records():
     assert report["ok"] is True and report["record_count"] == 0
 
 
+HIN_GOOD = [
+    {"segment_id": "s1", "fullname": "Main St", "mtfcc": "S1200", "length_km": 1.5,
+     "center_lat": 34.0, "center_lon": -118.0, "fatal_crashes": 3.0, "hin_rank": 1, "rur_urb": 2.0},
+    {"segment_id": "s2", "center_lat": 40.0, "center_lon": -74.0},
+]
+
+
+def test_hin_schema_valid_records():
+    report = validation.validate_records(HIN_GOOD, validation.HIN_SEGMENT_SCHEMA)
+    assert report["ok"] is True and report["valid_records"] == 2
+
+
+def test_hin_schema_catches_problems():
+    records = [
+        {"center_lat": 34.0, "center_lon": -118.0},  # missing segment_id
+        {"segment_id": "a", "center_lat": 999.0, "center_lon": -118.0},  # lat out of range
+        {"segment_id": "a", "center_lat": 34.0, "center_lon": -118.0},  # duplicate id
+    ]
+    report = validation.validate_records(records, validation.HIN_SEGMENT_SCHEMA)
+    assert report["codes"]["missing"] >= 1  # segment_id (and center_lat on first row? no, present)
+    assert report["codes"]["range"] == 1
+    assert report["codes"]["duplicate"] == 1
+
+
+def test_hin_numeric_fields_accept_floats_from_parquet():
+    # rur_urb/hin_rank as floats (as parquet may store them) must not be flagged.
+    records = [{"segment_id": "s", "center_lat": 34.0, "center_lon": -118.0,
+                "rur_urb": 2.0, "hin_rank": 5.0, "fatal_crashes": 0.0}]
+    report = validation.validate_records(records, validation.HIN_SEGMENT_SCHEMA)
+    assert report["ok"] is True
+
+
+def test_validate_dataset_dispatch_hin():
+    assert validation.validate_dataset("high_injury_network", HIN_GOOD)["ok"] is True
+
+
 def test_overflowing_int_is_not_finite_not_a_crash():
     # A JSON integer too large to become a float must degrade, not raise.
     records = [{"id": "x", "name": "X", "kind": "hospital", "lat": 0.0, "lon": 0.0, "capacity": 10**400}]
