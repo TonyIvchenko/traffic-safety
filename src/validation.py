@@ -49,9 +49,30 @@ HIN_SEGMENT_SCHEMA = (
     {"name": "func_sys", "type": "float", "required": False},
 )
 
+# The per-segment equity overlay (see build_equity_overlay OVERLAY_COLUMNS). The
+# boolean flags are left untyped because the store coerces 0/1/"true" via _to_bool,
+# so flagging them would be a false positive.
+EQUITY_OVERLAY_SCHEMA = (
+    {"name": "segment_id", "type": "str", "required": True, "unique": True},
+    {"name": "tract_geoid", "type": "str", "required": False},
+    {"name": "svi_percentile", "type": "float", "required": False, "min": 0.0, "max": 1.0},
+    {
+        "name": "svi_category", "type": "str", "required": False,
+        "choices": ["low", "moderate", "high", "very_high", "unknown"],
+    },
+    {"name": "disadvantaged", "required": False},
+    {"name": "in_equity_index", "required": False},
+    {"name": "risk", "type": "float", "required": False, "min": 0.0, "max": 1.0},
+    {"name": "crashes", "type": "float", "required": False, "min": 0.0},
+    {"name": "center_lat", "type": "float", "required": True, "min": -90.0, "max": 90.0},
+    {"name": "center_lon", "type": "float", "required": True, "min": -180.0, "max": 180.0},
+    {"name": "fullname", "type": "str", "required": False},
+)
+
 SCHEMAS = {
     "critical_facilities": FACILITY_SCHEMA,
     "high_injury_network": HIN_SEGMENT_SCHEMA,
+    "equity_overlay": EQUITY_OVERLAY_SCHEMA,
 }
 
 

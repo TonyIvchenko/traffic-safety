@@ -121,6 +121,37 @@ def test_validate_dataset_dispatch_hin():
     assert validation.validate_dataset("high_injury_network", HIN_GOOD)["ok"] is True
 
 
+EQUITY_GOOD = [
+    {"segment_id": "e1", "tract_geoid": "06037", "svi_percentile": 0.82,
+     "svi_category": "very_high", "disadvantaged": True, "in_equity_index": 1,
+     "risk": 0.4, "crashes": 5.0, "center_lat": 34.0, "center_lon": -118.0},
+    {"segment_id": "e2", "svi_category": "low", "disadvantaged": 0,
+     "center_lat": 40.0, "center_lon": -74.0},
+]
+
+
+def test_equity_schema_valid_records():
+    report = validation.validate_records(EQUITY_GOOD, validation.EQUITY_OVERLAY_SCHEMA)
+    assert report["ok"] is True and report["valid_records"] == 2  # 0/1/True all accepted for bool flags
+
+
+def test_equity_schema_catches_problems():
+    records = [
+        {"segment_id": "e", "svi_category": "catastrophic", "center_lat": 34.0, "center_lon": -118.0},  # choice
+        {"segment_id": "f", "svi_percentile": 1.5, "center_lat": 34.0, "center_lon": -118.0},  # range
+        {"center_lat": 34.0, "center_lon": -118.0},  # missing segment_id
+    ]
+    report = validation.validate_records(records, validation.EQUITY_OVERLAY_SCHEMA)
+    assert report["codes"]["choice"] == 1
+    assert report["codes"]["range"] == 1
+    assert report["codes"]["missing"] == 1
+
+
+def test_validate_dataset_dispatch_equity():
+    assert validation.validate_dataset("equity_overlay", EQUITY_GOOD)["ok"] is True
+    assert "equity_overlay" in validation.SCHEMAS
+
+
 def test_overflowing_int_is_not_finite_not_a_crash():
     # A JSON integer too large to become a float must degrade, not raise.
     records = [{"id": "x", "name": "X", "kind": "hospital", "lat": 0.0, "lon": 0.0, "capacity": 10**400}]
