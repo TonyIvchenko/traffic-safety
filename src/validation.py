@@ -72,6 +72,9 @@ EQUITY_OVERLAY_SCHEMA = (
 SCHEMAS = {
     "critical_facilities": FACILITY_SCHEMA,
     "high_injury_network": HIN_SEGMENT_SCHEMA,
+    # Countermeasures are served from the same HIN segment file, so they share the
+    # segment schema (crash_typing reads mtfcc/rur_urb/func_sys off these rows).
+    "countermeasures": HIN_SEGMENT_SCHEMA,
     "equity_overlay": EQUITY_OVERLAY_SCHEMA,
 }
 

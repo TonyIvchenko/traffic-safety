@@ -121,6 +121,12 @@ def test_validate_dataset_dispatch_hin():
     assert validation.validate_dataset("high_injury_network", HIN_GOOD)["ok"] is True
 
 
+def test_countermeasures_shares_segment_schema():
+    # Countermeasures validate against the same HIN segment file/shape.
+    assert validation.schema_for("countermeasures") is validation.HIN_SEGMENT_SCHEMA
+    assert validation.validate_dataset("countermeasures", HIN_GOOD)["ok"] is True
+
+
 EQUITY_GOOD = [
     {"segment_id": "e1", "tract_geoid": "06037", "svi_percentile": 0.82,
      "svi_category": "very_high", "disadvantaged": True, "in_equity_index": 1,
