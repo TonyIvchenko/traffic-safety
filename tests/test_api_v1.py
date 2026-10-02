@@ -331,6 +331,23 @@ def test_v1_advisory_point_climatology():
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 
+def test_v1_advisory_point_degrades_when_model_unavailable(monkeypatch):
+    # With no model bundle, predict_point raises RuntimeError; the endpoint must
+    # degrade (like /advisory/region and /national) rather than 500.
+    import predict
+
+    monkeypatch.setattr(predict, "MODEL_BUNDLE", {})
+    client = TestClient(MODULE.api)
+    response = client.get(
+        "/v1/advisory/point?lat=34.05&lon=-118.24&day_of_week=3&hour=8&month=2"
+    )
+    assert response.status_code == 200  # not a 500
+    payload = response.json()
+    assert payload["in_coverage"] is False
+    assert payload["weather_source"] == "unavailable"
+    assert payload["advisory"]["level"] == "Low"
+
+
 def test_v1_advisory_point_rejects_bad_mode():
     client = TestClient(MODULE.api)
     assert (

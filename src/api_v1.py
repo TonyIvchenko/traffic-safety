@@ -382,6 +382,26 @@ _HAZARD_DRIVER_PHRASES = {
 }
 
 
+def _model_unavailable_result(lat, lon, day_of_week, hour, month) -> dict:
+    """A degraded prediction stub for when the model bundle is absent.
+
+    Lets /v1/advisory/point degrade to an out-of-coverage "Low" reading (as
+    /v1/advisory/region and /national already do via the all-zero profile) instead
+    of surfacing the model's RuntimeError as an HTTP 500.
+    """
+    return {
+        "risk_score": 0.0,
+        "in_coverage": False,
+        "cell_id": None,
+        "month": int(month),
+        "local_day_of_week": int(day_of_week),
+        "local_hour": int(hour),
+        "weather": None,
+        "weather_source": "unavailable",
+        "hazards": None,
+    }
+
+
 def _advisory_drivers(result) -> list[str]:
     """Human-readable advisory drivers from a prediction's hazard labels."""
     if not isinstance(result, dict):
@@ -1088,11 +1108,18 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 raise HTTPException(
                     status_code=502, detail=f"weather provider request failed: {exc}"
                 ) from exc
+            except RuntimeError:
+                # Model bundle unavailable: degrade rather than 500 (consistent with
+                # the region/national advisory endpoints).
+                result = _model_unavailable_result(lat, lon, day_of_week, hour, month)
         else:
             response.headers["Cache-Control"] = "public, max-age=3600"
-            result = deps.predict_point(
-                lat=lat, lon=lon, day_of_week=day_of_week, hour=hour, month=month
-            )
+            try:
+                result = deps.predict_point(
+                    lat=lat, lon=lon, day_of_week=day_of_week, hour=hour, month=month
+                )
+            except RuntimeError:
+                result = _model_unavailable_result(lat, lon, day_of_week, hour, month)
 
         score = _safe_float(result.get("risk_score")) or 0.0
         drivers = _advisory_drivers(result)
