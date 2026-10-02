@@ -24,6 +24,7 @@ if str(SRC_DIR) not in sys.path:
 import cmf_math
 import crash_costs
 import crash_typing
+from segment_support import haversine_km
 
 from scripts.common import HIGH_INJURY_NETWORK_PATH
 
@@ -380,6 +381,37 @@ class CountermeasureStore:
 
     def get_segment(self, segment_id) -> dict | None:
         return self._segments.get(str(segment_id).strip())
+
+    def nearest_segment(self, lat, lon, *, max_km: float | None = None) -> dict | None:
+        """The HIN segment whose centroid is nearest ``(lat, lon)``.
+
+        Returns ``{"segment_id", "distance_km"}`` for the closest segment (within
+        ``max_km`` when given), or None if the store is empty, no segment is in
+        range, or the query coordinates are invalid. Segments missing/NaN
+        centroids are skipped.
+        """
+        try:
+            query_lat, query_lon = float(lat), float(lon)
+        except (TypeError, ValueError):
+            return None
+        best_id = None
+        best_distance = None
+        for segment_id, segment in self._segments.items():
+            try:
+                seg_lat = float(segment.get("center_lat"))
+                seg_lon = float(segment.get("center_lon"))
+            except (TypeError, ValueError):
+                continue
+            if seg_lat != seg_lat or seg_lon != seg_lon:  # NaN
+                continue
+            distance = haversine_km(query_lat, query_lon, seg_lat, seg_lon)
+            if max_km is not None and distance > max_km:
+                continue
+            if best_distance is None or distance < best_distance:
+                best_distance, best_id = distance, segment_id
+        if best_id is None:
+            return None
+        return {"segment_id": best_id, "distance_km": round(best_distance, 4)}
 
     def recommend(self, segment_id, *, top_n: int = 5) -> dict | None:
         segment = self.get_segment(segment_id)

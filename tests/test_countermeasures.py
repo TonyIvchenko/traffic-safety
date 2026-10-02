@@ -332,3 +332,27 @@ def test_store_hotspots_bbox_and_min_fatal(tmp_path):
     assert {h["segment_id"] for h in in_la} == {"seg-1"}
     # min_fatal_crashes filters seg-1 (6) out, keeps seg-2 (10).
     assert {h["segment_id"] for h in store.hotspots(min_fatal_crashes=8)} == {"seg-2"}
+
+
+def test_nearest_segment():
+    store = cm.CountermeasureStore(
+        {
+            "la": {"segment_id": "la", "center_lat": 34.0, "center_lon": -118.0},
+            "ny": {"segment_id": "ny", "center_lat": 40.7, "center_lon": -74.0},
+            "no_coords": {"segment_id": "no_coords"},
+            "nan": {"segment_id": "nan", "center_lat": float("nan"), "center_lon": -118.0},
+        }
+    )
+    near = store.nearest_segment(34.05, -118.05)  # ~7 km from the LA segment
+    assert near["segment_id"] == "la"
+    assert near["distance_km"] >= 0.0
+    # A generous radius keeps the LA segment; a tight one excludes it.
+    assert store.nearest_segment(34.05, -118.05, max_km=20.0)["segment_id"] == "la"
+    assert store.nearest_segment(34.05, -118.05, max_km=1.0) is None
+    assert store.nearest_segment(0.0, 0.0, max_km=100.0) is None  # nothing in range
+
+
+def test_nearest_segment_degrades():
+    assert cm.CountermeasureStore({}).nearest_segment(34.0, -118.0) is None
+    store = cm.CountermeasureStore({"la": {"segment_id": "la", "center_lat": 34.0, "center_lon": -118.0}})
+    assert store.nearest_segment("x", None) is None  # bad query coords
