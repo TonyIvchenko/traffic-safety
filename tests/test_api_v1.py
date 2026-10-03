@@ -348,6 +348,41 @@ def test_v1_advisory_point_degrades_when_model_unavailable(monkeypatch):
     assert payload["advisory"]["level"] == "Low"
 
 
+def test_v1_profile_point():
+    client = TestClient(MODULE.api)
+    response = client.get("/v1/profile/point?lat=34.05&lon=-118.24&day_of_week=5&hour=17")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=3600"
+    payload = response.json()
+    assert payload["advisory"]["level"] in {"Low", "Moderate", "Elevated", "High", "Extreme"}
+    assert isinstance(payload["equity"], dict)
+    facility = payload["nearest_facility"]
+    assert facility is not None and "distance_km" in facility
+    assert "countermeasure" in payload  # null without HIN data loaded
+    assert payload["caveats"]
+
+
+def test_v1_profile_point_joins_countermeasure(tmp_path, monkeypatch):
+    import pandas as pd
+
+    segment = pd.DataFrame(
+        [{
+            "segment_id": "near-la", "fullname": "Main St", "mtfcc": "S1200", "rttyp": "U",
+            "length_km": 1.0, "center_lat": 34.052, "center_lon": -118.243,
+            "fatal_crashes": 8.0, "hin_rank": 1, "rur_urb": 2, "func_sys": 3,
+        }]
+    )
+    path = tmp_path / "hin.parquet"
+    segment.to_parquet(path, index=False)
+    monkeypatch.setenv("TRAFFIC_SAFETY_CM_SEGMENTS_PATH", str(path))
+    client = TestClient(MODULE.api)
+    payload = client.get("/v1/profile/point?lat=34.05&lon=-118.24&segment_radius_km=10").json()
+    cm = payload["countermeasure"]
+    assert cm is not None and cm["segment_id"] == "near-la"
+    assert cm["distance_km"] <= 10.0
+    assert cm["recommended"] is not None and "benefit_cost" in cm["recommended"]
+
+
 def test_v1_advisory_point_rejects_bad_mode():
     client = TestClient(MODULE.api)
     assert (

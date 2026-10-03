@@ -1398,6 +1398,74 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         }
 
     @router.get(
+        "/profile/point",
+        summary="Unified safety profile for a location (risk, equity, countermeasure, facility)",
+    )
+    def profile_point(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+        day_of_week: int = Query(1, ge=1, le=7, description="Monday=1..Sunday=7"),
+        hour: int = Query(0, ge=0, le=23, description="local hour 0-23"),
+        month: int = Query(1, ge=1, le=12),
+        segment_radius_km: float = Query(
+            5.0, gt=0.0, le=50.0, description="search radius for the nearest HIN segment (km)"
+        ),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        frame_idx = (day_of_week - 1) * 24 + hour
+        frame_label = (
+            deps.frame_labels[frame_idx]
+            if 0 <= frame_idx < len(deps.frame_labels)
+            else str(frame_idx)
+        )
+
+        # Risk advisory (relative, climatological) from this cell's weekly profile.
+        profile = deps.cell_weekly_profile_provider(float(lat), float(lon), month)
+        value = profile[frame_idx] if 0 <= frame_idx < len(profile) else 0.0
+        advisory_block = advisory.relative_advisory(value, profile)
+        advisory_block["message"] = advisory_messages.compose(advisory_block, frame_idx=frame_idx)
+
+        # Nearest High Injury Network segment (within radius) + its best treatment.
+        countermeasure = None
+        cm_store = deps.countermeasure_provider()
+        near = cm_store.nearest_segment(lat, lon, max_km=segment_radius_km)
+        if near is not None:
+            recommendation = cm_store.recommend(near["segment_id"], top_n=1)
+            top = None
+            if recommendation and recommendation.get("recommendations"):
+                top = recommendation["recommendations"][0]
+            countermeasure = {
+                "segment_id": near["segment_id"],
+                "distance_km": near["distance_km"],
+                "segment": (recommendation or {}).get("segment"),
+                "recommended": top,
+            }
+
+        # Nearest critical facility.
+        nearby = deps.facility_provider().nearest(lat, lon, k=1)
+        nearest_facility = nearby[0] if nearby else None
+
+        return {
+            "lat": float(lat),
+            "lon": float(lon),
+            "frame_idx": frame_idx,
+            "frame_label": frame_label,
+            "risk_score": advisory_block["risk_score"],
+            "advisory": advisory_block,
+            "equity": deps.equity_provider(lat, lon),
+            "countermeasure": countermeasure,
+            "nearest_facility": nearest_facility,
+            "caveats": [
+                "A screening profile joining climatological risk, tract-level equity, "
+                "the nearest mapped HIN corridor, and the nearest facility; not a "
+                "site-specific assessment.",
+                "Countermeasure and facility coverage depend on the loaded datasets; "
+                "fields are null when nothing is in range.",
+            ],
+        }
+
+    @router.get(
         "/emergency/nearest-facility",
         summary="Nearest critical facilities (hospitals, shelters, fire stations)",
     )
