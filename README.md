@@ -510,6 +510,26 @@ size, formats, available validation schemas, and these endpoints.
 - Validation is schema-level (types, ranges, allowed values, uniqueness) — it
   checks structure, not semantic accuracy.
 
+## Unified Location Profile
+
+`GET /v1/profile/point` answers "what do we know about driving safety here?" in a
+single call, joining the subsystems above for one location:
+
+| Field | Source |
+|---|---|
+| `advisory` | relative risk advisory from the cell's weekly climatology |
+| `equity` | tract social vulnerability (SVI) + Justice40 status |
+| `countermeasure` | nearest High Injury Network corridor (within `segment_radius_km`) + its best treatment |
+| `nearest_facility` | closest hospital / shelter / fire station |
+
+```bash
+curl "http://127.0.0.1:8080/v1/profile/point?lat=34.05&lon=-118.24&day_of_week=5&hour=17"
+```
+
+Each field degrades to `null` when its dataset isn't loaded, so the profile is a
+screening overview, not a site-specific assessment. The `meta.profile` block at
+`/v1/meta` advertises it.
+
 ## Recommended Shape
 
 The most practical nationwide design is a two-layer system:

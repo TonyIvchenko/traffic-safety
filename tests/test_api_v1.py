@@ -228,6 +228,9 @@ def test_v1_meta_describes_datasets_and_validation():
     assert val["data_endpoint"] == "/v1/validation/data"
     assert val["model_report"] == "/v1/model/report"
     assert "critical_facilities" in val["schemas"]
+    profile = meta["profile"]
+    assert profile["endpoint"] == "/v1/profile/point"
+    assert set(profile["joins"]) == {"advisory", "equity", "countermeasure", "nearest_facility"}
 
 
 def test_v1_point_climatology():
