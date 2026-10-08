@@ -402,6 +402,31 @@ def _model_unavailable_result(lat, lon, day_of_week, hour, month) -> dict:
     }
 
 
+MAX_CORRIDOR_EQUITY_SAMPLES = 20
+
+
+def _corridor_equity_summary(records) -> dict:
+    """Aggregate equity records sampled along a route into a corridor rollup."""
+    sampled = 0
+    disadvantaged = 0
+    max_svi = None
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        sampled += 1
+        if record.get("disadvantaged"):
+            disadvantaged += 1
+        svi = _safe_float(record.get("svi_percentile"))
+        if svi is not None and (max_svi is None or svi > max_svi):
+            max_svi = svi
+    return {
+        "sampled_points": sampled,
+        "disadvantaged_points": disadvantaged,
+        "disadvantaged_fraction": round(disadvantaged / sampled, 4) if sampled else 0.0,
+        "max_svi_percentile": round(max_svi, 4) if max_svi is not None else None,
+    }
+
+
 def _advisory_drivers(result) -> list[str]:
     """Human-readable advisory drivers from a prediction's hazard labels."""
     if not isinstance(result, dict):
@@ -1473,6 +1498,78 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 "site-specific assessment.",
                 "Countermeasure and facility coverage depend on the loaded datasets; "
                 "fields are null when nothing is in range.",
+            ],
+        }
+
+    @router.post(
+        "/profile/route",
+        response_model=None,
+        summary="Unified safety profile along a route (risk, equity corridor, facilities)",
+    )
+    def profile_route(response: Response, body: RouteRequest):
+        points = _extract_route_points(body)
+        if body.mode.strip().lower() == "live":
+            _validate_provider(body.provider)
+        try:
+            route = risk_eval.score_route(
+                points,
+                mode=body.mode,
+                predict_point=deps.predict_point,
+                predict_point_live=deps.predict_point_live,
+                h3_resolution=deps.h3_resolution,
+                sample_spacing_km=body.sample_spacing_km,
+                day_of_week=body.day_of_week,
+                hour=body.hour,
+                month=body.month,
+                forecast_hours=body.forecast_hours,
+                provider=body.provider,
+            )
+        except (risk_eval.RouteConfigError, risk_eval.RouteTooLongError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except LiveWeatherProviderError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except requests.RequestException as exc:
+            raise HTTPException(
+                status_code=502, detail=f"weather provider request failed: {exc}"
+            ) from exc
+
+        steps = route.get("steps") or []
+        # Corridor equity: sample a bounded set of steps for tract-level equity.
+        stride = max(1, len(steps) // MAX_CORRIDOR_EQUITY_SAMPLES + 1) if steps else 1
+        sampled = steps[::stride]
+        equity_records = [deps.equity_provider(step["lat"], step["lon"]) for step in sampled]
+        equity_summary = _corridor_equity_summary(equity_records)
+
+        # Facilities near the trip ends.
+        facility_store = deps.facility_provider()
+        facilities_block = {"nearest_to_origin": None, "nearest_to_destination": None}
+        if steps:
+            origin_near = facility_store.nearest(steps[0]["lat"], steps[0]["lon"], k=1)
+            dest_near = facility_store.nearest(steps[-1]["lat"], steps[-1]["lon"], k=1)
+            facilities_block["nearest_to_origin"] = origin_near[0] if origin_near else None
+            facilities_block["nearest_to_destination"] = dest_near[0] if dest_near else None
+
+        route_summary = {
+            key: route.get(key)
+            for key in (
+                "mode", "distance_km", "sample_count", "sample_spacing_km",
+                "route_risk_score_mean", "route_risk_score_max", "route_risk_level",
+                "high_risk_fraction", "riskiest_point",
+            )
+        }
+        response.headers["Cache-Control"] = (
+            "no-store" if route.get("mode") == "live" else "public, max-age=3600"
+        )
+        return {
+            "model_version": deps.model_version,
+            "route": route_summary,
+            "equity": equity_summary,
+            "facilities": facilities_block,
+            "caveats": [
+                "A screening profile along the route: risk from the model, tract-level "
+                "equity sampled at up to "
+                f"{MAX_CORRIDOR_EQUITY_SAMPLES} points, and the nearest facilities to the "
+                "trip ends. Not turn-by-turn guidance.",
             ],
         }
 

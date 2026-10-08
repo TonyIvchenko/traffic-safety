@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import sys
 
 from fastapi.testclient import TestClient
+import pytest
 
 
 def load_module():
@@ -384,6 +385,50 @@ def test_v1_profile_point_joins_countermeasure(tmp_path, monkeypatch):
     assert cm is not None and cm["segment_id"] == "near-la"
     assert cm["distance_km"] <= 10.0
     assert cm["recommended"] is not None and "benefit_cost" in cm["recommended"]
+
+
+def test_corridor_equity_summary_helper():
+    import api_v1  # already imported by main; src is on sys.path
+
+    records = [
+        {"disadvantaged": True, "svi_percentile": 0.9},
+        {"disadvantaged": False, "svi_percentile": 0.3},
+        {"disadvantaged": True, "svi_percentile": 0.6},
+        "not a dict",
+    ]
+    summary = api_v1._corridor_equity_summary(records)
+    assert summary["sampled_points"] == 3
+    assert summary["disadvantaged_points"] == 2
+    assert summary["disadvantaged_fraction"] == pytest.approx(2 / 3, abs=1e-4)
+    assert summary["max_svi_percentile"] == 0.9
+    empty = api_v1._corridor_equity_summary([])
+    assert empty["disadvantaged_fraction"] == 0.0 and empty["max_svi_percentile"] is None
+
+
+def test_v1_profile_route_climatology():
+    client = TestClient(MODULE.api)
+    body = {
+        "waypoints": [[-118.24, 34.05], [-118.30, 34.10], [-118.40, 34.15]],  # [lon, lat]
+        "mode": "climatology", "day_of_week": 5, "hour": 17, "month": 9,
+    }
+    response = client.post("/v1/profile/route", json=body)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=3600"
+    payload = response.json()
+    route = payload["route"]
+    assert 0.0 <= route["route_risk_score_mean"] <= 1.0
+    assert route["route_risk_level"] in {"low", "moderate", "high", "extreme"}
+    assert route["mode"] == "climatology"
+    assert set(payload["equity"]) >= {"sampled_points", "disadvantaged_fraction", "max_svi_percentile"}
+    assert payload["equity"]["sampled_points"] >= 1
+    assert "facilities" in payload and "nearest_to_origin" in payload["facilities"]
+
+
+def test_v1_profile_route_rejects_short_route():
+    client = TestClient(MODULE.api)
+    # Fewer than two waypoints -> 422 from route extraction.
+    response = client.post("/v1/profile/route", json={"waypoints": [[-118.24, 34.05]]})
+    assert response.status_code == 422
 
 
 def test_v1_advisory_point_rejects_bad_mode():
