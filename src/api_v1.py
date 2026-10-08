@@ -1040,13 +1040,14 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             },
             "profile": {
                 "enabled": True,
-                "endpoint": "/v1/profile/point",
+                "endpoints": ["/v1/profile/point", "/v1/profile/route"],
                 "joins": ["advisory", "equity", "countermeasure", "nearest_facility"],
                 "note": (
                     "One call joining the relative risk advisory, tract equity, the nearest "
                     "High Injury Network corridor + its treatment, and the nearest facility "
-                    "for a location (climatological screening; fields are null when a dataset "
-                    "is not loaded)."
+                    "for a location; /v1/profile/route extends this along a drive (route risk "
+                    "summary, corridor equity rollup, facilities at the trip ends). Fields are "
+                    "null when a dataset is not loaded."
                 ),
             },
             "docs_url": "/v1/docs",

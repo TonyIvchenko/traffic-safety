@@ -530,6 +530,17 @@ Each field degrades to `null` when its dataset isn't loaded, so the profile is a
 screening overview, not a site-specific assessment. The `meta.profile` block at
 `/v1/meta` advertises it.
 
+`POST /v1/profile/route` extends the same idea along a drive (waypoints or a
+GeoJSON LineString): a route-risk summary (mean/max/level, riskiest stretch), a
+corridor equity rollup sampled along the way, and the nearest facilities to the
+trip ends.
+
+```bash
+curl -X POST "http://127.0.0.1:8080/v1/profile/route" \
+  -H 'content-type: application/json' \
+  -d '{"waypoints":[[-118.24,34.05],[-118.40,34.15]],"day_of_week":5,"hour":17}'
+```
+
 ## Recommended Shape
 
 The most practical nationwide design is a two-layer system:
