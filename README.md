@@ -151,6 +151,10 @@ export TRAFFIC_SAFETY_RATE_LIMIT_ENABLED=1
 
 # CORS for browser clients (comma-separated origins; default "*")
 export TRAFFIC_SAFETY_CORS_ORIGINS="*"
+
+# Precompute per-region weekly profiles at startup so the first national advisory
+# / readiness request skips the ~3 s cold-start (off by default)
+export TRAFFIC_SAFETY_WARM_ON_START=1
 ```
 
 Successful `/v1` responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`;

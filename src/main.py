@@ -77,6 +77,7 @@ from predict import (
     weekly_risk_profile,
 )
 import region_index
+import regions
 from api_ratelimit import install_rate_limit_middleware, rate_limiter_from_env
 from api_v1 import V1Dependencies, build_v1_router
 from countermeasures import catalog_metadata as _countermeasure_catalog_metadata
@@ -1180,6 +1181,25 @@ api.include_router(
         )
     )
 )
+
+WARM_ON_START_ENV = "TRAFFIC_SAFETY_WARM_ON_START"
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _warm_on_start() -> bool:
+    return os.environ.get(WARM_ON_START_ENV, "").strip().lower() in _TRUTHY
+
+
+def _warm_caches() -> None:
+    """Precompute each region's weekly profile so the first national advisory /
+    readiness request skips the cold-start cost. Opt-in via WARM_ON_START_ENV so
+    tests and fast boots are unaffected."""
+    for region in regions.list_regions():
+        _region_weekly_profile_provider(region["id"], 1)
+
+
+if _warm_on_start():
+    _warm_caches()
 
 
 def _utc_label(value: str | None) -> str:

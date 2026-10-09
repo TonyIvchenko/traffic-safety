@@ -1258,3 +1258,22 @@ def test_v1_heatmap_geojson():
     assert payload["type"] == "FeatureCollection"
     if payload["features"]:
         assert payload["features"][0]["geometry"]["type"] == "Point"
+
+
+def test_warm_on_start_flag(monkeypatch):
+    monkeypatch.setenv("TRAFFIC_SAFETY_WARM_ON_START", "1")
+    assert MODULE._warm_on_start() is True
+    monkeypatch.setenv("TRAFFIC_SAFETY_WARM_ON_START", "no")
+    assert MODULE._warm_on_start() is False
+    monkeypatch.delenv("TRAFFIC_SAFETY_WARM_ON_START", raising=False)
+    assert MODULE._warm_on_start() is False
+
+
+def test_warm_caches_populates_region_profile(monkeypatch):
+    import regions
+
+    la = regions.get_region("los_angeles")
+    monkeypatch.setattr(regions, "list_regions", lambda: [la])
+    MODULE._warm_caches()  # a single region -> fast
+    profile = MODULE._region_weekly_profile_provider("los_angeles", 1)
+    assert len(profile) == 168
