@@ -38,7 +38,7 @@ RELATIVE_ADVISORY_THRESHOLDS = (0.50, 0.70, 0.85, 0.95)
 def _clamp(risk_score) -> float:
     try:
         value = float(risk_score)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0.0
     if math.isnan(value):
         return 0.0
@@ -103,7 +103,8 @@ def advisory_scale(*, thresholds=DEFAULT_ADVISORY_THRESHOLDS) -> list[dict]:
 def _num_or_none(value):
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: an int too large to convert to float (untrusted input).
         return None
     return None if math.isnan(number) or math.isinf(number) else number
 
@@ -167,19 +168,20 @@ def relative_advisory(
     score = _clamp(value)
     factors = [str(driver).strip() for driver in (drivers or []) if str(driver).strip()]
     numbers = [n for n in (_num_or_none(item) for item in (reference or [])) if n is not None]
+    pct = percentile_of(value, numbers)
 
-    # Fewer than two distinct reference values means no relative signal — an empty
-    # reference, an out-of-coverage cell's all-zero weekly profile, or a perfectly
-    # flat climatology. Fall back to the absolute scale so a 0.0 out-of-coverage
-    # score reads "Low" rather than the midrank "Moderate".
-    if len(set(numbers)) < 2:
+    # No usable relative signal — fall back to the absolute scale — when the
+    # reference has fewer than two distinct values (empty, an out-of-coverage
+    # all-zero profile, or a flat climatology) or the value itself is non-numeric
+    # (percentile_of returns None). This keeps a 0.0 out-of-coverage score "Low"
+    # rather than the midrank "Moderate".
+    if len(set(numbers)) < 2 or pct is None:
         result = advisory(score, drivers=factors, thresholds=absolute_thresholds)
         result["percentile"] = None
         result["basis"] = "absolute"
         result["relative_descriptor"] = None
         return result
 
-    pct = percentile_of(value, numbers)
     level = _level_for_fraction(pct, thresholds)
     descriptor = relative_descriptor(pct)
     message = f"{level['name']} — {level['advice']} Currently {descriptor} for this location."
