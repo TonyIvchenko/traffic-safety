@@ -34,7 +34,7 @@ FACILITY_KINDS = ("hospital", "fire_station", "emergency_shelter")
 def _to_float(value):
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return None if math.isnan(number) else number
 

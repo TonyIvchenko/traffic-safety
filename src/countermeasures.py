@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -392,7 +393,9 @@ class CountermeasureStore:
         """
         try:
             query_lat, query_lon = float(lat), float(lon)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not (math.isfinite(query_lat) and math.isfinite(query_lon)):
             return None
         best_id = None
         best_distance = None
@@ -400,9 +403,9 @@ class CountermeasureStore:
             try:
                 seg_lat = float(segment.get("center_lat"))
                 seg_lon = float(segment.get("center_lon"))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
-            if seg_lat != seg_lat or seg_lon != seg_lon:  # NaN
+            if not (math.isfinite(seg_lat) and math.isfinite(seg_lon)):  # NaN/inf
                 continue
             distance = haversine_km(query_lat, query_lon, seg_lat, seg_lon)
             if max_km is not None and distance > max_km:

@@ -80,9 +80,10 @@ def _coord(point) -> tuple[float, float] | None:
         return None
     try:
         lat_f, lon_f = float(lat), float(lon)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    if math.isnan(lat_f) or math.isnan(lon_f):
+    # Reject non-finite (NaN/inf): inf would make haversine_km domain-error.
+    if not (math.isfinite(lat_f) and math.isfinite(lon_f)):
         return None
     return (lat_f, lon_f)
 
