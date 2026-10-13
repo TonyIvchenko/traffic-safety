@@ -35,21 +35,28 @@ _TRUE_STRINGS = {"true", "1", "yes", "t"}
 def _percentile(value):
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    return None if math.isnan(number) or number < 0.0 else number
+    return None if not math.isfinite(number) or number < 0.0 else number
 
 
 def _round(value):
-    return None if value is None else round(float(value), 4)
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    # Null non-finite (NaN/inf) so a corrupt cell can't leak invalid JSON.
+    return round(number, 4) if math.isfinite(number) else None
 
 
 def _num(value, default: float = 0.0) -> float:
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
-    return default if math.isnan(number) else number
+    return default if not math.isfinite(number) else number
 
 
 def _to_bool(value) -> bool:
@@ -227,14 +234,18 @@ def _json_scalar(value):
             return None
     except (TypeError, ValueError):
         pass  # array-valued cell: pd.isna is ambiguous
+    result = value
     if hasattr(value, "item"):
         try:
-            return value.item()
+            result = value.item()
         except (ValueError, AttributeError):
-            pass  # size>1 array: fall through to tolist()
-    if hasattr(value, "tolist"):
+            return value.tolist() if hasattr(value, "tolist") else value
+    elif hasattr(value, "tolist"):
         return value.tolist()
-    return value
+    # Null non-finite floats so they never serialize as invalid JSON (NaN/Infinity).
+    if isinstance(result, float) and not math.isfinite(result):
+        return None
+    return result
 
 
 def _overlay_in_bbox(frame: "pd.DataFrame", bbox) -> "pd.DataFrame":
@@ -292,12 +303,14 @@ def crash_burden_index(frame: "pd.DataFrame") -> dict:
     Computed over segments with a known SVI. (A true per-capita rate would need
     tract population, which the equity index does not currently carry.)
     """
+    _infs = [float("inf"), float("-inf")]
     if "crashes" in frame.columns:
-        crashes = pd.to_numeric(frame["crashes"], errors="coerce").fillna(0.0)
+        crashes = pd.to_numeric(frame["crashes"], errors="coerce").replace(_infs, float("nan")).fillna(0.0)
     else:
         crashes = pd.Series(0.0, index=frame.index)
     if "svi_percentile" in frame.columns:
-        svi = pd.to_numeric(frame["svi_percentile"], errors="coerce")
+        # inf -> NaN so a corrupt SVI is treated as unknown, not propagated.
+        svi = pd.to_numeric(frame["svi_percentile"], errors="coerce").replace(_infs, float("nan"))
     else:
         svi = pd.Series(float("nan"), index=frame.index)
 
@@ -338,13 +351,16 @@ def equity_disparity(frame: "pd.DataFrame") -> dict:
         if "disadvantaged" in frame.columns
         else pd.Series(False, index=frame.index)
     )
+    # Coerce to numeric and treat inf as missing (-> 0.0), so a corrupt cell can't
+    # propagate inf through the aggregates into invalid JSON.
+    _infs = [float("inf"), float("-inf")]
     crashes = (
-        pd.to_numeric(frame["crashes"], errors="coerce").fillna(0.0)
+        pd.to_numeric(frame["crashes"], errors="coerce").replace(_infs, float("nan")).fillna(0.0)
         if "crashes" in frame.columns
         else pd.Series(0.0, index=frame.index)
     )
     risk = (
-        pd.to_numeric(frame["risk"], errors="coerce").fillna(0.0)
+        pd.to_numeric(frame["risk"], errors="coerce").replace(_infs, float("nan")).fillna(0.0)
         if "risk" in frame.columns
         else pd.Series(0.0, index=frame.index)
     )
@@ -483,8 +499,8 @@ class EquityOverlay:
                     "svi_category": svi_category(svi),
                     "disadvantaged": bool(row["disadvantaged"]),
                     "segment_count": int(row["segment_count"]),
-                    "crashes": 0.0 if pd.isna(row["crashes"]) else round(float(row["crashes"]), 3),
-                    "mean_risk": None if pd.isna(row["mean_risk"]) else round(float(row["mean_risk"]), 4),
+                    "crashes": round(_num(row["crashes"], 0.0), 3),
+                    "mean_risk": _round(row["mean_risk"]),
                     "center_lat": _round(None if pd.isna(row["center_lat"]) else float(row["center_lat"])),
                     "center_lon": _round(None if pd.isna(row["center_lon"]) else float(row["center_lon"])),
                 }

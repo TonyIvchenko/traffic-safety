@@ -17,8 +17,10 @@ if str(SRC_DIR) not in sys.path:
 
 import advisory
 import countermeasures
+import equity
 import facilities
 import geo_math
+import pandas as pd
 import validation
 
 LEVELS = {"Low", "Moderate", "Elevated", "High", "Extreme"}
@@ -130,3 +132,27 @@ def test_fuzz_geo_math_points_never_raises():
                 points.append((_value(rng), _value(rng)))
         _assert_json_standard(geo_math.nearest_k(34.0, -118.0, points, k=rng.randint(0, 4)))
         _assert_json_standard(geo_math.within_radius_km(34.0, -118.0, points, 50.0))
+
+
+def test_fuzz_equity_overlay_outputs_are_json_standard():
+    # A corrupt/dropped-in equity overlay (incl. inf cells) must never leak
+    # non-standard JSON (NaN/Infinity) from the equity endpoints.
+    rng = random.Random(4242)
+    columns = [
+        "segment_id", "tract_geoid", "svi_percentile", "svi_category",
+        "disadvantaged", "in_equity_index", "risk", "crashes", "center_lat",
+        "center_lon", "fullname",
+    ]
+    # Values a float64 parquet column can actually hold when corrupt (not a 400-digit
+    # Python int, which parquet can't store and which pandas itself overflows on).
+    palette = [None, 0.0, 0.5, 1.0, -0.3, 2.0, float("nan"), float("inf"),
+               -float("inf"), "x", "high", True, False]
+    for _ in range(150):
+        rows = []
+        for i in range(rng.randint(0, 6)):
+            rows.append({col: rng.choice(palette) for col in columns})
+            rows[-1]["segment_id"] = f"s{i}"  # ensure a usable id
+        overlay = equity.EquityOverlay(pd.DataFrame(rows, columns=columns))
+        _assert_json_standard(overlay.hotspots(top_n=10))
+        _assert_json_standard(overlay.tract_records())
+        _assert_json_standard(overlay.summary())
