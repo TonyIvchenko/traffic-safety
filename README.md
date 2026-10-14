@@ -103,7 +103,21 @@ consumers. Interactive docs are served at `/v1/docs` (Swagger) and `/v1/redoc`;
 the schema is at `/v1/openapi.json`. There is **no authentication** — access is
 controlled only by a per-client-IP rate limiter.
 
-Endpoints:
+### APIs at a glance
+
+| Area | Prefix | What it does |
+|---|---|---|
+| Core risk | `/v1/risk/*` | Point, weekly curve, route, and bbox-area crash risk (climatology or live) |
+| [Safety grants](#federal-safety-grant-analysis-ss4a--hsip) | `/v1/grants/*` | SS4A/HSIP analysis: HIN, systemic risk, benefit-cost per jurisdiction |
+| [Equity](#equity--justice40-overlay) | `/v1/equity/*` | SVI + Justice40 overlay, hotspots, disparity, choropleth |
+| [Countermeasures](#countermeasure-recommendations-fhwa-cmfs) | `/v1/countermeasures/*` | FHWA CMF treatments + benefit-cost for HIN segments |
+| [Road Risk Advisory](#road-risk-advisory-aqi-for-driving) | `/v1/advisory/*` | Relative "AQI for driving" — point, region, national |
+| [Emergency](#emergency-response--evacuation) | `/v1/emergency/*` | Nearest facilities, evacuation routing, regional readiness |
+| [Open data](#open-data--validation) | `/v1/datasets/*`, `/v1/validation/*` | Dataset catalog + download, data-quality validation |
+| [Unified profile](#unified-location-profile) | `/v1/profile/*` | One call joining risk + equity + countermeasure + facility for a point or route |
+| Discovery | `/v1/meta`, `/v1/health`, `/v1/model/report` | Capabilities, liveness, model calibration backtest |
+
+Core risk endpoints:
 
 | Method & path | Purpose |
 |---|---|
