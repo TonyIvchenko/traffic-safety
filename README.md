@@ -640,6 +640,26 @@ pip install -r requirements.txt -r requirements-dev.txt
 pytest
 ```
 
+CI (GitHub Actions, [.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the
+suite on every push/PR. The trained model and overlay are build artifacts kept out
+of git, so model-backed integration tests skip in CI (see `tests/conftest.py`) and
+run locally where the artifacts are present.
+
+### Container
+
+```bash
+docker build -t traffic-safety .
+# Mount the build artifacts (model, overlay, processed data) the image doesn't bake in:
+docker run -p 8080:8080 \
+  -v "$PWD/models:/app/models" -v "$PWD/tiles:/app/tiles" \
+  -v "$PWD/data/processed:/app/data/processed" traffic-safety
+```
+
+The image serves `uvicorn main:api` on port 8080 with a `/v1/health` healthcheck.
+Without the mounts it still boots and serves the discovery, validation, and
+reference endpoints; `/v1/health` reports `model_ready=false` until the model is
+mounted.
+
 ## Files In This Folder
 
 - [main.py](/Users/toxa/git/traffic-safety/src/main.py)

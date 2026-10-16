@@ -1,0 +1,18 @@
+.git
+.github
+__pycache__
+*.pyc
+.pytest_cache
+tests
+# Large/generated data that is mounted at runtime, not baked into the image.
+data/raw
+data/processed
+data/reports
+data/advisory
+data/emergency
+# Build artifacts (mount at runtime).
+models
+tiles
+# Local tooling / docs not needed in the image.
+*.md
+.vscode
