@@ -662,7 +662,7 @@ mounted.
 
 ## Files In This Folder
 
-- [main.py](/Users/toxa/git/traffic-safety/src/main.py)
-- [ARCHITECTURE.md](/Users/toxa/git/traffic-safety/ARCHITECTURE.md)
-- [DATA_SOURCES.md](/Users/toxa/git/traffic-safety/DATA_SOURCES.md)
-- [source_catalog.json](/Users/toxa/git/traffic-safety/source_catalog.json)
+- [main.py](src/main.py)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [DATA_SOURCES.md](DATA_SOURCES.md)
+- [source_catalog.json](source_catalog.json)
