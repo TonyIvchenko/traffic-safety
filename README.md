@@ -666,3 +666,9 @@ mounted.
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [DATA_SOURCES.md](DATA_SOURCES.md)
 - [source_catalog.json](source_catalog.json)
+
+## License
+
+Released under the [MIT License](LICENSE). Note that the upstream data sources
+(FARS, Census TIGER, CDC/ATSDR SVI, CEJST, NOAA, etc.) carry their own terms —
+verify each source's license before redistributing derived data.
