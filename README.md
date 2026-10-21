@@ -169,6 +169,12 @@ export TRAFFIC_SAFETY_CORS_ORIGINS="*"
 # Precompute per-region weekly profiles at startup so the first national advisory
 # / readiness request skips the ~3 s cold-start (off by default)
 export TRAFFIC_SAFETY_WARM_ON_START=1
+
+# Artifact locations (default to models/ and tiles/ in the repo) — point these at
+# mounted volumes in a container deployment
+export TRAFFIC_SAFETY_MODEL_PATH=/data/models/traffic_safety.joblib
+export TRAFFIC_SAFETY_SEGMENT_MODEL_PATH=/data/models/traffic_safety_segments.joblib
+export TRAFFIC_SAFETY_TILES_DIR=/data/tiles
 ```
 
 Successful `/v1` responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`;

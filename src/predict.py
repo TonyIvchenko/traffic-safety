@@ -8,6 +8,7 @@ behaviour is unchanged.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 
@@ -26,7 +27,9 @@ from live_weather import fetch_live_weather
 from model_support import build_feature_matrix, lookup_weather_climatology
 import hazard_flags
 
-MODEL_PATH = REPO_DIR / "models" / "traffic_safety.joblib"
+# Path to the trained model bundle; overridable so a deployment can mount the
+# artifact anywhere (e.g. a Docker volume) via TRAFFIC_SAFETY_MODEL_PATH.
+MODEL_PATH = Path(os.environ.get("TRAFFIC_SAFETY_MODEL_PATH") or REPO_DIR / "models" / "traffic_safety.joblib")
 
 
 def _load_joblib_bundle(path: Path) -> dict[str, object]:

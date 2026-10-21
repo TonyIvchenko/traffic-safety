@@ -91,7 +91,7 @@ from watch_store import get_default_store as _get_watch_store
 
 STATIC_DIR = SRC_DIR / "static"
 STATIC_URL = "/traffic-safety-static"
-TILES_DIR = REPO_DIR / "tiles"
+TILES_DIR = Path(os.environ.get("TRAFFIC_SAFETY_TILES_DIR") or REPO_DIR / "tiles")
 CONTACT_SUBMISSIONS_PATH = REPO_DIR / "data" / "contact_submissions.jsonl"
 STATIC_ASSET_VERSION = max(
     (STATIC_DIR / "map.css").stat().st_mtime_ns,
@@ -169,7 +169,10 @@ OVERLAY = _load_overlay(
     },
     default_shape=(360, 760),
 )
-SEGMENT_MODEL_PATH = REPO_DIR / "models" / "traffic_safety_segments.joblib"
+SEGMENT_MODEL_PATH = Path(
+    os.environ.get("TRAFFIC_SAFETY_SEGMENT_MODEL_PATH")
+    or REPO_DIR / "models" / "traffic_safety_segments.joblib"
+)
 LIVE_PROVIDER_CHOICES = ["auto", *[status.name for status in provider_statuses()]]
 
 
