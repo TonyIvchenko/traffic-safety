@@ -18,6 +18,16 @@ import watch_store as ws
 NOW = datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def reference_profile(monkeypatch):
+    # A reference weekly climatology spanning 0.1..0.9 so scores map to known
+    # relative percentiles (0.2 -> Low, 0.9 -> Extreme) without the real model.
+    # Point/route watches resolve a reference point; area watches here carry no
+    # centroid, so they fall back to the absolute level.
+    profile = [0.1 + 0.8 * i / 167 for i in range(168)]
+    monkeypatch.setattr(ew, "weekly_risk_profile", lambda lat, lon, month: list(profile))
+
+
 @pytest.fixture()
 def store(tmp_path):
     return ws.WatchStore(tmp_path / "watches.sqlite3")
@@ -101,7 +111,8 @@ def test_below_threshold_updates_status_without_notifying(store, webhook_calls, 
     assert summary["breached"] == 0 and summary["notified"] == 0
     assert webhook_calls == []
     record = store.get_watch(watch["id"])
-    assert record["last_level"] == "moderate"
+    # 0.2 sits in the bottom quintile of the reference profile -> relative "low".
+    assert record["last_level"] == "low"
     assert record["last_breach_at"] is None
 
 
@@ -203,4 +214,61 @@ def test_area_watch_with_no_segments_is_low(store, webhook_calls, monkeypatch):
     )
     summary = ew.run_once(store, now=NOW)
     assert summary["breached"] == 0
+    assert store.get_watch(watch["id"])["last_level"] == "low"
+
+
+# --------------------------------------------------------------------------- #
+# Relative-breach semantics (H1.1): watches fire on how unusual the risk is for
+# the watched place/time, not on absolute risk that saturates in dense metros.
+# --------------------------------------------------------------------------- #
+
+
+def test_relative_breach_maps_level_index_to_threshold_word():
+    assert ew.relative_breach(4, "high") is True       # High meets "high"
+    assert ew.relative_breach(5, "high") is True       # Extreme exceeds "high"
+    assert ew.relative_breach(3, "high") is False      # Elevated is below "high"
+    assert ew.relative_breach(5, "extreme") is True
+    assert ew.relative_breach(4, "extreme") is False
+    assert ew.relative_breach(2, "moderate") is True
+    assert ew.relative_breach(1, "low") is True
+    assert ew.relative_breach("MODERATE", "moderate") is False  # non-numeric index
+    assert ew.relative_breach(3, "nonsense") is False           # unknown threshold
+
+
+def test_relative_assessment_scores_against_reference_profile():
+    hot = ew.relative_assessment(0.93, {"lat": 34.0, "lon": -118.0}, month=7)
+    assert hot["basis"] == "relative_to_local_weekly_normal"
+    assert hot["level"] == "Extreme"
+    cold = ew.relative_assessment(0.2, {"lat": 34.0, "lon": -118.0}, month=7)
+    assert cold["level"] == "Low"
+    # No reference point -> None, so the caller falls back to the absolute level.
+    assert ew.relative_assessment(0.5, None, month=7) is None
+
+
+def test_breach_payload_carries_relative_context(store, webhook_calls, monkeypatch):
+    monkeypatch.setattr(ew, "predict_traffic_safety_live", _fake_point("extreme", 0.93))
+    _point_watch(store)
+
+    ew.run_once(store, now=NOW)
+
+    payload = webhook_calls[0]["payload"]
+    assert payload["basis"] == "relative_to_local_weekly_normal"
+    assert payload["percentile"] == pytest.approx(1.0)
+    assert payload["relative_descriptor"] == "near this location's weekly peak"
+    assert payload["risk_level"] == "extreme"
+    # The raw absolute reading is preserved alongside the relative decision.
+    assert payload["detail"]["absolute_risk_level"] == "extreme"
+
+
+def test_locally_normal_risk_does_not_breach_despite_high_absolute(store, webhook_calls, monkeypatch):
+    # A dense-metro point whose absolute level is "extreme" but whose score sits
+    # in the bottom quartile of its own weekly normal must NOT fire: that is the
+    # whole point of relative alerting.
+    monkeypatch.setattr(ew, "predict_traffic_safety_live", _fake_point("extreme", 0.3))
+    watch = _point_watch(store)  # threshold "high"
+
+    summary = ew.run_once(store, now=NOW)
+
+    assert summary == {"evaluated": 1, "breached": 0, "notified": 0, "errors": 0}
+    assert webhook_calls == []
     assert store.get_watch(watch["id"])["last_level"] == "low"
