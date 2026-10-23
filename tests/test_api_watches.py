@@ -118,6 +118,21 @@ def test_watch_validation_errors(client):
     assert bad_provider.status_code == 400
 
 
+def test_horizon_watch_accepted_and_range_checked(client):
+    ok = client.post(
+        "/v1/watches",
+        json={"kind": "point", "params": {"lat": 34.0, "lon": -118.0, "horizon_hours": 12}},
+    )
+    assert ok.status_code == 201
+    assert ok.json()["params"]["horizon_hours"] == 12
+
+    too_far = client.post(
+        "/v1/watches",
+        json={"kind": "point", "params": {"lat": 34.0, "lon": -118.0, "horizon_hours": 72}},
+    )
+    assert too_far.status_code == 422
+
+
 def test_meta_documents_watches(client):
     payload = client.get("/v1/meta").json()
     assert payload["watches"]["enabled"] is True

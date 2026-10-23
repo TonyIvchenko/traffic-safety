@@ -58,6 +58,22 @@ def _fake_point(level: str, score: float):
     return fake
 
 
+def _fake_point_by_hour(scores_by_hour: dict[int, float], *, default: float = 0.0):
+    """A point predictor whose score depends on the forecast offset (for horizons)."""
+
+    def fake(*, lat, lon, forecast_hours, provider):
+        score = scores_by_hour.get(int(forecast_hours), default)
+        return {
+            "risk_score": score,
+            "risk_level": "extreme" if score >= 0.5 else "low",
+            "weather_source": "forecast",
+            "live_provider": "nws",
+            "hazards": {"labels": []},
+        }
+
+    return fake
+
+
 def _point_watch(store, **kwargs):
     defaults = dict(
         kind="point",
@@ -270,5 +286,54 @@ def test_locally_normal_risk_does_not_breach_despite_high_absolute(store, webhoo
     summary = ew.run_once(store, now=NOW)
 
     assert summary == {"evaluated": 1, "breached": 0, "notified": 0, "errors": 0}
+    assert webhook_calls == []
+    assert store.get_watch(watch["id"])["last_level"] == "low"
+
+
+# --------------------------------------------------------------------------- #
+# Forecast-horizon watches (H1.2): scan the next N hours and alert ahead of time.
+# --------------------------------------------------------------------------- #
+
+
+def test_horizon_offsets_span_window_and_cap_samples():
+    assert ew._horizon_offsets(12) == [0, 2, 4, 6, 8, 10, 12]
+    assert ew._horizon_offsets(6) == [0, 1, 2, 3, 4, 5, 6]
+    offsets = ew._horizon_offsets(48)
+    assert len(offsets) <= ew.MAX_HORIZON_SAMPLES
+    assert offsets[0] == 0 and offsets[-1] == 48  # window edges always sampled
+
+
+def _horizon_point_watch(store, scores, monkeypatch, *, horizon=12):
+    monkeypatch.setattr(ew, "predict_traffic_safety_live", _fake_point_by_hour(scores, default=0.2))
+    return _point_watch(
+        store,
+        params={"lat": 34.05, "lon": -118.24, "forecast_hours": 0,
+                "horizon_hours": horizon, "provider": "auto"},
+    )
+
+
+def test_horizon_watch_alerts_on_earliest_future_breach(store, webhook_calls, monkeypatch):
+    # Calm now, but risk spikes 8 hours out: fire with 8h of lead time.
+    scores = {0: 0.2, 2: 0.2, 4: 0.2, 6: 0.3, 8: 0.93, 10: 0.93, 12: 0.93}
+    _horizon_point_watch(store, scores, monkeypatch)
+
+    summary = ew.run_once(store, now=NOW)
+
+    assert summary == {"evaluated": 1, "breached": 1, "notified": 1, "errors": 0}
+    payload = webhook_calls[0]["payload"]
+    assert payload["lead_time_hours"] == 8
+    assert payload["horizon_hours"] == 12
+    assert payload["risk_level"] == "extreme"
+    assert [f["hour"] for f in payload["forecast"]] == [0, 2, 4, 6, 8, 10, 12]
+    assert payload["forecast"][0]["breached"] is False
+    assert payload["forecast"][4]["breached"] is True  # the 8-hour sample
+
+
+def test_horizon_watch_quiet_window_does_not_breach(store, webhook_calls, monkeypatch):
+    watch = _horizon_point_watch(store, {}, monkeypatch)  # every hour defaults to 0.2
+
+    summary = ew.run_once(store, now=NOW)
+
+    assert summary["breached"] == 0 and summary["notified"] == 0
     assert webhook_calls == []
     assert store.get_watch(watch["id"])["last_level"] == "low"

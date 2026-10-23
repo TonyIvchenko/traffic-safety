@@ -344,6 +344,11 @@ def _validate_watch_params(kind: str, params: dict) -> dict:
             normalized["forecast_hours"] = int(params.get("forecast_hours", 0))
         else:
             raise ValueError("kind must be 'point', 'route', or 'area'")
+        # Forecast-horizon watches scan the next N hours and alert ahead of time;
+        # 0 (the default) keeps the single-shot "evaluate now" behavior.
+        normalized["horizon_hours"] = int(params.get("horizon_hours", 0))
+        if not (0 <= normalized["horizon_hours"] <= 48):
+            raise ValueError("horizon_hours must be 0-48")
     except HTTPException:
         raise
     except (KeyError, TypeError, ValueError) as exc:

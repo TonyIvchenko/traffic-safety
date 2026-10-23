@@ -13,12 +13,19 @@ When the relative level reaches the watch's threshold and the cooldown has
 elapsed, the alert is POSTed to the subscriber's webhook signed with the watch's
 secret. Poll-channel watches just get their status refreshed for
 GET /v1/watches/{id}.
+
+A watch with ``horizon_hours`` > 0 is a *forecast-horizon* watch: instead of
+scoring only the current hour it samples the forecast across the next N hours
+and fires on the earliest hour predicted to breach, so subscribers get lead time
+(``lead_time_hours``) rather than a same-hour alarm. The full sampled window is
+included in the alert as ``forecast``.
 """
 
 from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import math
 from pathlib import Path
 import sys
 
@@ -46,12 +53,21 @@ from watch_store import WatchStore, get_default_store, level_at_least
 # (Low 1, Moderate 2, Elevated 3, High 4, Extreme 5).
 _THRESHOLD_TO_RELATIVE_INDEX = {"low": 1, "moderate": 2, "elevated": 3, "high": 4, "extreme": 5}
 
+# A forecast-horizon watch is sampled at most this many times across its window
+# so one watch never costs more than a handful of live-model calls per sweep.
+MAX_HORIZON_SAMPLES = 9
 
-def evaluate_point(params: dict) -> dict:
+
+def _forecast_hours(params: dict, override: int | None) -> int:
+    """The forecast offset to score: a horizon sample overrides the watch's own."""
+    return int(params.get("forecast_hours", 0)) if override is None else int(override)
+
+
+def evaluate_point(params: dict, *, forecast_hours_override: int | None = None) -> dict:
     result = predict_traffic_safety_live(
         lat=float(params["lat"]),
         lon=float(params["lon"]),
-        forecast_hours=int(params.get("forecast_hours", 0)),
+        forecast_hours=_forecast_hours(params, forecast_hours_override),
         provider=params.get("provider", "auto"),
     )
     return {
@@ -66,7 +82,7 @@ def evaluate_point(params: dict) -> dict:
     }
 
 
-def evaluate_route(params: dict) -> dict:
+def evaluate_route(params: dict, *, forecast_hours_override: int | None = None) -> dict:
     points = [(float(lon), float(lat)) for lon, lat in params["waypoints"]]
     scored = risk_eval.score_route(
         points,
@@ -75,7 +91,7 @@ def evaluate_route(params: dict) -> dict:
         predict_point_live=predict_traffic_safety_live,
         h3_resolution=int(MODEL_BUNDLE.get("resolution", 5)),
         sample_spacing_km=float(params.get("sample_spacing_km", 2.0)),
-        forecast_hours=int(params.get("forecast_hours", 0)),
+        forecast_hours=_forecast_hours(params, forecast_hours_override),
         provider=params.get("provider", "auto"),
     )
     riskiest = scored["riskiest_point"]
@@ -94,13 +110,13 @@ def evaluate_route(params: dict) -> dict:
     }
 
 
-def evaluate_area(params: dict) -> dict:
+def evaluate_area(params: dict, *, forecast_hours_override: int | None = None) -> dict:
     result = segment_runtime.score_segments_in_bbox(
         min_lat=float(params["min_lat"]),
         max_lat=float(params["max_lat"]),
         min_lon=float(params["min_lon"]),
         max_lon=float(params["max_lon"]),
-        forecast_hours=int(params.get("forecast_hours", 0)),
+        forecast_hours=_forecast_hours(params, forecast_hours_override),
         provider=params.get("provider", "auto"),
         limit=int(params.get("limit", 100)),
     )
@@ -150,6 +166,79 @@ def relative_assessment(risk_score, ref, *, month: int):
     return advisory.relative_advisory(risk_score, list(profile))
 
 
+def _horizon_offsets(horizon_hours: int) -> list[int]:
+    """Forecast offsets (hours ahead) to sample across a watch's look-ahead window.
+
+    Always includes 0 (now) and ``horizon_hours`` (the far edge), spaced so no
+    watch exceeds :data:`MAX_HORIZON_SAMPLES` live-model calls. ``horizon_hours``
+    <= 0 means a single-shot watch, handled by the caller (not here).
+    """
+    horizon = max(1, int(horizon_hours))
+    step = max(1, math.ceil(horizon / (MAX_HORIZON_SAMPLES - 1)))
+    offsets = list(range(0, horizon + 1, step))
+    if offsets[-1] != horizon:
+        offsets.append(horizon)
+    return offsets
+
+
+def _decide(outcome: dict, watch: dict, month: int):
+    """(level, breached, relative) for one scored outcome, relative with fallback."""
+    relative = relative_assessment(outcome["risk_score"], outcome.get("ref"), month=month)
+    if relative is not None and relative.get("basis") == "relative_to_local_weekly_normal":
+        level = str(relative["level"]).lower()
+        return level, relative_breach(relative["level_index"], watch["threshold_level"]), relative
+    level = outcome["risk_level"]
+    return level, level_at_least(level, watch["threshold_level"]), relative
+
+
+def _assess_watch(watch: dict, now: datetime) -> dict:
+    """Score a watch, scanning its forecast horizon when it has one.
+
+    Returns the decision that drives notification: the earliest hour predicted to
+    breach (maximum lead time) when any does, otherwise the current hour for
+    status. ``forecast`` is the per-hour sampled window (None for single-shot).
+    """
+    params = watch["params"]
+    evaluator = EVALUATORS[watch["kind"]]
+    horizon = int(params.get("horizon_hours", 0) or 0)
+    # None => evaluator honors the watch's own forecast_hours (single-shot, back-compat).
+    offsets = _horizon_offsets(horizon) if horizon > 0 else [None]
+
+    samples = []
+    forecast = []
+    for offset in offsets:
+        outcome = evaluator(params, forecast_hours_override=offset)
+        level, breached, relative = _decide(outcome, watch, now.month)
+        samples.append({"offset": offset, "level": level, "breached": breached,
+                        "relative": relative, "outcome": outcome})
+        if horizon > 0:
+            forecast.append({
+                "hour": int(offset),
+                "risk_level": level,
+                "basis": relative.get("basis") if relative else "absolute",
+                "percentile": relative.get("percentile") if relative else None,
+                "breached": breached,
+            })
+
+    breaching = [s for s in samples if s["breached"]]
+    if breaching:
+        chosen = min(breaching, key=lambda s: s["offset"] if s["offset"] is not None else 0)
+        lead_time = chosen["offset"]
+    else:
+        chosen = samples[0]  # offset 0 / current hour, for status
+        lead_time = None
+
+    return {
+        "level": chosen["level"],
+        "breached": bool(breaching),
+        "relative": chosen["relative"],
+        "outcome": chosen["outcome"],
+        "lead_time_hours": lead_time,
+        "horizon_hours": horizon,
+        "forecast": forecast or None,
+    }
+
+
 def _cooldown_active(watch: dict, now: datetime) -> bool:
     last = watch.get("last_notified_at")
     if not last:
@@ -161,23 +250,23 @@ def run_once(store: WatchStore, *, dry_run: bool = False, now: datetime | None =
     now = now or datetime.now(timezone.utc)
     summary = {"evaluated": 0, "breached": 0, "notified": 0, "errors": 0}
     for watch in store.list_active():
-        evaluator = EVALUATORS.get(watch["kind"])
+        if watch["kind"] not in EVALUATORS:
+            print(f"watch {watch['id']}: unknown kind {watch['kind']!r}")
+            summary["errors"] += 1
+            continue
         try:
-            outcome = evaluator(watch["params"])
+            assessment = _assess_watch(watch, now)
         except Exception as exc:  # one broken watch must not stop the sweep
             print(f"watch {watch['id']} ({watch['kind']}): evaluation failed: {exc}")
             summary["errors"] += 1
             continue
 
-        # Relative breach: how unusual the risk is for this place/time. Falls back
-        # to the absolute level when there is no usable local-normal reference.
-        relative = relative_assessment(outcome["risk_score"], outcome.get("ref"), month=now.month)
-        if relative is not None and relative.get("basis") == "relative_to_local_weekly_normal":
-            level = str(relative["level"]).lower()
-            breached = relative_breach(relative["level_index"], watch["threshold_level"])
-        else:
-            level = outcome["risk_level"]
-            breached = level_at_least(level, watch["threshold_level"])
+        # Breach: how unusual the risk is for this place/time, scanning the watch's
+        # forecast horizon when it has one so the alert carries lead time.
+        level = assessment["level"]
+        breached = assessment["breached"]
+        relative = assessment["relative"]
+        outcome = assessment["outcome"]
 
         notified = False
         if (
@@ -196,6 +285,9 @@ def run_once(store: WatchStore, *, dry_run: bool = False, now: datetime | None =
                 "percentile": relative.get("percentile") if relative else None,
                 "basis": relative.get("basis") if relative else "absolute",
                 "relative_descriptor": relative.get("relative_descriptor") if relative else None,
+                "lead_time_hours": assessment["lead_time_hours"],
+                "horizon_hours": assessment["horizon_hours"],
+                "forecast": assessment["forecast"],
                 "threshold_level": watch["threshold_level"],
                 "params": watch["params"],
                 "detail": {**outcome["detail"], "absolute_risk_level": outcome["risk_level"]},
