@@ -133,7 +133,42 @@ def test_horizon_watch_accepted_and_range_checked(client):
     assert too_far.status_code == 422
 
 
+def test_email_watch_accepted_and_validated(client):
+    ok = client.post(
+        "/v1/watches",
+        json={
+            "kind": "point",
+            "params": {"lat": 34.0, "lon": -118.0},
+            "channel": "email",
+            "email": "driver@example.test",
+        },
+    )
+    assert ok.status_code == 201
+    payload = ok.json()
+    assert payload["channel"] == "email"
+    assert payload["email"] == "driver@example.test"
+
+    missing = client.post(
+        "/v1/watches",
+        json={"kind": "point", "params": {"lat": 34.0, "lon": -118.0}, "channel": "email"},
+    )
+    assert missing.status_code == 422
+
+    malformed = client.post(
+        "/v1/watches",
+        json={
+            "kind": "point",
+            "params": {"lat": 34.0, "lon": -118.0},
+            "channel": "email",
+            "email": "not-an-email",
+        },
+    )
+    assert malformed.status_code == 422
+
+
 def test_meta_documents_watches(client):
     payload = client.get("/v1/meta").json()
     assert payload["watches"]["enabled"] is True
     assert set(payload["watches"]["kinds"]) == {"point", "route", "area"}
+    assert "email" in payload["watches"]["channels"]
+    assert "email_configured" in payload["watches"]

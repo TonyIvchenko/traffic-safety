@@ -37,6 +37,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import advisory
+import advisory_messages
 import notify
 import risk_eval
 import segment_runtime
@@ -246,6 +247,65 @@ def _cooldown_active(watch: dict, now: datetime) -> bool:
     return now - datetime.fromisoformat(last) < timedelta(minutes=int(watch["cooldown_minutes"]))
 
 
+def _alert_payload(watch: dict, now: datetime, assessment: dict) -> dict:
+    """The channel-independent alert body (also the webhook JSON)."""
+    level = assessment["level"]
+    relative = assessment["relative"]
+    outcome = assessment["outcome"]
+    return {
+        "watch_id": watch["id"],
+        "kind": watch["kind"],
+        "evaluated_at_utc": now.isoformat(),
+        "risk_score": outcome["risk_score"],
+        "risk_level": level,
+        "percentile": relative.get("percentile") if relative else None,
+        "basis": relative.get("basis") if relative else "absolute",
+        "relative_descriptor": relative.get("relative_descriptor") if relative else None,
+        "lead_time_hours": assessment["lead_time_hours"],
+        "horizon_hours": assessment["horizon_hours"],
+        "forecast": assessment["forecast"],
+        "threshold_level": watch["threshold_level"],
+        "params": watch["params"],
+        "detail": {**outcome["detail"], "absolute_risk_level": outcome["risk_level"]},
+    }
+
+
+def _email_message(watch: dict, assessment: dict) -> tuple[str, str]:
+    """A plain-text subject/body for an email-channel alert."""
+    level = str(assessment["level"]).title()
+    kind = watch["kind"]
+    relative = assessment["relative"]
+    subject = f"[RoadRiskMonitor] {level} risk alert for your {kind} watch"
+
+    sentence = advisory_messages.compose(relative) if isinstance(relative, dict) else ""
+    lines = [sentence or f"{level} risk detected for your {kind} watch."]
+    lead = assessment.get("lead_time_hours")
+    if lead:
+        lines.append(
+            f"Predicted about {int(lead)} hour(s) ahead "
+            f"(within a {int(assessment['horizon_hours'])}-hour forecast horizon)."
+        )
+    lines += [
+        "",
+        f"Threshold: {watch['threshold_level']}  |  Watch ID: {watch['id']}",
+        "You are receiving this because you subscribed to a RoadRiskMonitor risk watch.",
+    ]
+    return subject, "\n".join(lines)
+
+
+def _deliver(watch: dict, now: datetime, assessment: dict) -> dict:
+    """Deliver an alert over the watch's channel; returns a delivery record."""
+    channel = watch["channel"]
+    if channel == "webhook" and watch.get("webhook_url"):
+        return notify.post_webhook(
+            watch["webhook_url"], _alert_payload(watch, now, assessment), watch["webhook_secret"]
+        )
+    if channel == "email" and watch.get("email"):
+        subject, body = _email_message(watch, assessment)
+        return notify.send_email(watch["email"], subject, body)
+    return {"delivered": False, "error": f"channel {channel!r} has no destination"}
+
+
 def run_once(store: WatchStore, *, dry_run: bool = False, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     summary = {"evaluated": 0, "breached": 0, "notified": 0, "errors": 0}
@@ -265,39 +325,18 @@ def run_once(store: WatchStore, *, dry_run: bool = False, now: datetime | None =
         # forecast horizon when it has one so the alert carries lead time.
         level = assessment["level"]
         breached = assessment["breached"]
-        relative = assessment["relative"]
-        outcome = assessment["outcome"]
 
         notified = False
         if (
             breached
             and not dry_run
-            and watch["channel"] == "webhook"
-            and watch["webhook_url"]
+            and watch["channel"] != "poll"
             and not _cooldown_active(watch, now)
         ):
-            payload = {
-                "watch_id": watch["id"],
-                "kind": watch["kind"],
-                "evaluated_at_utc": now.isoformat(),
-                "risk_score": outcome["risk_score"],
-                "risk_level": level,
-                "percentile": relative.get("percentile") if relative else None,
-                "basis": relative.get("basis") if relative else "absolute",
-                "relative_descriptor": relative.get("relative_descriptor") if relative else None,
-                "lead_time_hours": assessment["lead_time_hours"],
-                "horizon_hours": assessment["horizon_hours"],
-                "forecast": assessment["forecast"],
-                "threshold_level": watch["threshold_level"],
-                "params": watch["params"],
-                "detail": {**outcome["detail"], "absolute_risk_level": outcome["risk_level"]},
-            }
-            delivery = notify.post_webhook(
-                watch["webhook_url"], payload, watch["webhook_secret"]
-            )
+            delivery = _deliver(watch, now, assessment)
             notified = bool(delivery["delivered"])
             if not notified:
-                print(f"watch {watch['id']}: webhook delivery failed: {delivery}")
+                print(f"watch {watch['id']}: {watch['channel']} delivery failed: {delivery}")
 
         store.record_evaluation(
             watch["id"], level=level, breached=breached, notified=notified, now_iso=now.isoformat()

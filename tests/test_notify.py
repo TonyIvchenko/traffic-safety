@@ -80,3 +80,110 @@ def test_post_webhook_handles_network_error(monkeypatch):
     assert result["delivered"] is False
     assert result["status_code"] is None
     assert "unreachable" in result["error"]
+
+
+# --------------------------------------------------------------------------- #
+# Email delivery (H1.3)
+# --------------------------------------------------------------------------- #
+
+_SMTP_ENV = (
+    "TRAFFIC_SAFETY_SMTP_HOST",
+    "TRAFFIC_SAFETY_SMTP_PORT",
+    "TRAFFIC_SAFETY_SMTP_USERNAME",
+    "TRAFFIC_SAFETY_SMTP_PASSWORD",
+    "TRAFFIC_SAFETY_SMTP_FROM",
+    "TRAFFIC_SAFETY_SMTP_STARTTLS",
+)
+
+
+def _clear_smtp_env(monkeypatch):
+    for name in _SMTP_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_email_not_configured_without_host(monkeypatch):
+    _clear_smtp_env(monkeypatch)
+    assert notify.email_configured() is False
+    result = notify.send_email("driver@example.test", "Subj", "Body")
+    assert result == {"delivered": False, "error": "smtp_not_configured"}
+
+
+def test_smtp_settings_from_env(monkeypatch):
+    _clear_smtp_env(monkeypatch)
+    monkeypatch.setenv("TRAFFIC_SAFETY_SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("TRAFFIC_SAFETY_SMTP_USERNAME", "mailer")
+    monkeypatch.setenv("TRAFFIC_SAFETY_SMTP_STARTTLS", "0")
+    cfg = notify.smtp_settings()
+    assert cfg["host"] == "smtp.example.test"
+    assert cfg["port"] == 587  # default
+    assert cfg["sender"] == "mailer"  # falls back to the username
+    assert cfg["starttls"] is False
+    assert notify.email_configured() is True
+
+
+def test_send_email_uses_smtp_and_reports_delivered(monkeypatch):
+    sent = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            sent.update(host=host, port=port, timeout=timeout)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def starttls(self, context=None):
+            sent["starttls"] = True
+
+        def login(self, username, password):
+            sent["login"] = (username, password)
+
+        def send_message(self, message):
+            sent["to"] = message["To"]
+            sent["from"] = message["From"]
+            sent["subject"] = message["Subject"]
+            sent["body"] = message.get_content()
+
+    monkeypatch.setattr(notify.smtplib, "SMTP", FakeSMTP)
+    cfg = {
+        "host": "smtp.example.test",
+        "port": 2525,
+        "username": "mailer",
+        "password": "pw",
+        "sender": "alerts@example.test",
+        "starttls": True,
+    }
+    result = notify.send_email("driver@example.test", "High risk", "Drive safe", settings=cfg)
+
+    assert result == {"delivered": True, "error": None}
+    assert sent["host"] == "smtp.example.test" and sent["port"] == 2525
+    assert sent["starttls"] is True
+    assert sent["login"] == ("mailer", "pw")
+    assert sent["to"] == "driver@example.test"
+    assert sent["from"] == "alerts@example.test"
+    assert sent["subject"] == "High risk"
+    assert "Drive safe" in sent["body"]
+
+
+def test_send_email_reports_smtp_failure(monkeypatch):
+    import smtplib as _smtplib
+
+    def boom(*a, **k):
+        raise _smtplib.SMTPException("relay refused")
+
+    monkeypatch.setattr(notify.smtplib, "SMTP", boom)
+    cfg = {"host": "h", "port": 25, "username": None, "password": None,
+           "sender": "a@b.test", "starttls": False}
+    result = notify.send_email("x@y.test", "s", "b", settings=cfg)
+    assert result["delivered"] is False
+    assert "relay refused" in result["error"]
+
+
+def test_send_email_requires_recipient():
+    cfg = {"host": "h", "port": 25, "username": None, "password": None,
+           "sender": "a@b.test", "starttls": False}
+    assert notify.send_email("", "s", "b", settings=cfg) == {
+        "delivered": False, "error": "no_recipient"
+    }

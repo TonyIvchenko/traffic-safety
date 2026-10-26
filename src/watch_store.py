@@ -21,7 +21,7 @@ REPO_DIR = SRC_DIR.parent
 DEFAULT_DB_PATH = REPO_DIR / "data" / "watches.sqlite3"
 
 WATCH_KINDS = {"point", "route", "area"}
-WATCH_CHANNELS = {"poll", "webhook"}
+WATCH_CHANNELS = {"poll", "webhook", "email"}
 LEVEL_ORDER = {"low": 0, "moderate": 1, "high": 2, "extreme": 3}
 
 _SCHEMA = """
@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS watches (
     channel TEXT NOT NULL,
     webhook_url TEXT,
     webhook_secret TEXT,
+    email TEXT,
     cooldown_minutes INTEGER NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
@@ -43,6 +44,9 @@ CREATE TABLE IF NOT EXISTS watches (
     last_notified_at TEXT
 );
 """
+
+# Columns added after the original schema shipped; applied to pre-existing DBs.
+_MIGRATIONS = (("email", "TEXT"),)
 
 
 def utc_now_iso() -> str:
@@ -60,6 +64,10 @@ class WatchStore:
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(_SCHEMA)
+            existing = {row["name"] for row in connection.execute("PRAGMA table_info(watches)")}
+            for name, decl in _MIGRATIONS:
+                if name not in existing:
+                    connection.execute(f"ALTER TABLE watches ADD COLUMN {name} {decl}")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, timeout=10)
@@ -74,6 +82,7 @@ class WatchStore:
         threshold_level: str = "high",
         channel: str = "poll",
         webhook_url: str | None = None,
+        email: str | None = None,
         cooldown_minutes: int = 60,
     ) -> dict:
         kind = str(kind).strip().lower()
@@ -87,6 +96,8 @@ class WatchStore:
             raise ValueError(f"threshold_level must be one of {sorted(LEVEL_ORDER)}")
         if channel == "webhook" and not (webhook_url or "").strip():
             raise ValueError("webhook channel requires webhook_url")
+        if channel == "email" and not (email or "").strip():
+            raise ValueError("email channel requires email")
         if int(cooldown_minutes) < 0:
             raise ValueError("cooldown_minutes must be >= 0")
 
@@ -99,6 +110,7 @@ class WatchStore:
             "channel": channel,
             "webhook_url": (webhook_url or "").strip() or None,
             "webhook_secret": secrets.token_urlsafe(24) if channel == "webhook" else None,
+            "email": (email or "").strip() or None,
             "cooldown_minutes": int(cooldown_minutes),
             "active": True,
             "created_at": utc_now_iso(),
@@ -112,8 +124,8 @@ class WatchStore:
                 """
                 INSERT INTO watches (
                     id, token, kind, params, threshold_level, channel, webhook_url,
-                    webhook_secret, cooldown_minutes, active, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    webhook_secret, email, cooldown_minutes, active, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["id"],
@@ -124,6 +136,7 @@ class WatchStore:
                     record["channel"],
                     record["webhook_url"],
                     record["webhook_secret"],
+                    record["email"],
                     record["cooldown_minutes"],
                     1,
                     record["created_at"],
@@ -220,6 +233,7 @@ def public_view(record: dict, *, include_secrets: bool = False) -> dict:
         "threshold_level": record["threshold_level"],
         "channel": record["channel"],
         "webhook_url": record["webhook_url"],
+        "email": record.get("email"),
         "cooldown_minutes": record["cooldown_minutes"],
         "active": record["active"],
         "created_at": record["created_at"],

@@ -54,6 +54,40 @@ def test_webhook_channel_requires_url_and_gets_secret(store):
     assert created["webhook_url"] == "https://example.test/hook"
 
 
+def test_email_channel_requires_address_and_stores_it(store):
+    with pytest.raises(ValueError, match="email"):
+        store.create_watch(kind="point", params={"lat": 1.0, "lon": 2.0}, channel="email")
+
+    created = store.create_watch(
+        kind="point",
+        params={"lat": 1.0, "lon": 2.0},
+        channel="email",
+        email="driver@example.test",
+    )
+    assert created["channel"] == "email"
+    assert created["email"] == "driver@example.test"
+    assert created["webhook_secret"] is None  # email channel has no webhook secret
+    assert store.get_watch(created["id"])["email"] == "driver@example.test"
+    assert ws.public_view(created)["email"] == "driver@example.test"
+
+
+def test_email_column_migrates_onto_a_preexisting_db(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "legacy.sqlite3"
+    # Simulate a DB created before the email column existed.
+    legacy_schema = ws._SCHEMA.replace("    email TEXT,\n", "")
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(legacy_schema)
+    assert "email" not in legacy_schema
+
+    store = ws.WatchStore(db_path)  # opening runs the migration
+    created = store.create_watch(
+        kind="point", params={"lat": 1.0, "lon": 2.0}, channel="email", email="a@b.test"
+    )
+    assert store.get_watch(created["id"])["email"] == "a@b.test"
+
+
 def test_validation_rejects_bad_values(store):
     with pytest.raises(ValueError):
         store.create_watch(kind="nonsense", params={})

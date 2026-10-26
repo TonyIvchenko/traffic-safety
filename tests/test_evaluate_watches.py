@@ -295,6 +295,53 @@ def test_locally_normal_risk_does_not_breach_despite_high_absolute(store, webhoo
 # --------------------------------------------------------------------------- #
 
 
+def _email_watch(store, **kwargs):
+    defaults = dict(
+        kind="point",
+        params={"lat": 34.05, "lon": -118.24, "forecast_hours": 0, "provider": "auto"},
+        threshold_level="high",
+        channel="email",
+        email="driver@example.test",
+    )
+    defaults.update(kwargs)
+    return store.create_watch(**defaults)
+
+
+def test_email_channel_breach_sends_email(store, monkeypatch):
+    sent = []
+
+    def fake_send(to_address, subject, body):
+        sent.append((to_address, subject, body))
+        return {"delivered": True, "error": None}
+
+    monkeypatch.setattr(ew.notify, "send_email", fake_send)
+    monkeypatch.setattr(ew, "predict_traffic_safety_live", _fake_point("extreme", 0.93))
+    watch = _email_watch(store)
+
+    summary = ew.run_once(store, now=NOW)
+
+    assert summary == {"evaluated": 1, "breached": 1, "notified": 1, "errors": 0}
+    assert len(sent) == 1
+    to_address, subject, body = sent[0]
+    assert to_address == "driver@example.test"
+    assert "risk alert" in subject.lower()
+    assert watch["id"] in body
+    assert store.get_watch(watch["id"])["last_notified_at"] == NOW.isoformat()
+
+
+def test_email_delivery_failure_is_not_counted_as_notified(store, monkeypatch):
+    monkeypatch.setattr(
+        ew.notify, "send_email", lambda *a, **k: {"delivered": False, "error": "smtp_not_configured"}
+    )
+    monkeypatch.setattr(ew, "predict_traffic_safety_live", _fake_point("extreme", 0.93))
+    watch = _email_watch(store)
+
+    summary = ew.run_once(store, now=NOW)
+
+    assert summary["breached"] == 1 and summary["notified"] == 0
+    assert store.get_watch(watch["id"])["last_notified_at"] is None
+
+
 def test_horizon_offsets_span_window_and_cap_samples():
     assert ew._horizon_offsets(12) == [0, 2, 4, 6, 8, 10, 12]
     assert ew._horizon_offsets(6) == [0, 1, 2, 3, 4, 5, 6]

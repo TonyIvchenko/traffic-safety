@@ -27,6 +27,7 @@ import datasets as datasets_catalog
 import evacuation
 import facilities
 import grant_html
+import notify
 import source_catalog
 import validation
 from live_weather import LiveWeatherProviderError
@@ -187,6 +188,7 @@ class WatchCreateRequest(BaseModel):
     threshold_level: str = "high"
     channel: str = "poll"
     webhook_url: str | None = None
+    email: str | None = None
     cooldown_minutes: int = Field(60, ge=0, le=1440)
 
 
@@ -914,11 +916,13 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "watches": {
                 "enabled": True,
                 "kinds": ["point", "route", "area"],
-                "channels": ["poll", "webhook"],
+                "channels": ["poll", "webhook", "email"],
+                "email_configured": notify.email_configured(),
                 "note": (
-                    "Watches store the submitted geometry and webhook URL until "
-                    "deleted; they are authorized only by the per-watch token "
-                    "returned at creation."
+                    "Watches store the submitted geometry and webhook URL or email "
+                    "until deleted; they are authorized only by the per-watch token "
+                    "returned at creation. Email delivery requires a server SMTP "
+                    "relay (email_configured reports whether one is set)."
                 ),
             },
             "grants": {
@@ -2527,6 +2531,10 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         kind = body.kind.strip().lower()
         params = _validate_watch_params(kind, body.params)
         _validate_provider(params["provider"])
+        if body.channel.strip().lower() == "email" and "@" not in (body.email or ""):
+            raise HTTPException(
+                status_code=422, detail="email channel requires a valid email address"
+            )
         try:
             record = deps.watch_store_provider().create_watch(
                 kind=kind,
@@ -2534,6 +2542,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 threshold_level=body.threshold_level,
                 channel=body.channel,
                 webhook_url=body.webhook_url,
+                email=body.email,
                 cooldown_minutes=body.cooldown_minutes,
             )
         except ValueError as exc:
