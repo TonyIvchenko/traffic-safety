@@ -276,6 +276,27 @@ def test_breach_payload_carries_relative_context(store, webhook_calls, monkeypat
     assert payload["detail"]["absolute_risk_level"] == "extreme"
 
 
+def test_breach_payload_is_richly_structured(store, webhook_calls, monkeypatch):
+    monkeypatch.setattr(ew, "predict_traffic_safety_live", _fake_point("extreme", 0.93))
+    _point_watch(store)
+
+    ew.run_once(store, now=NOW)
+    payload = webhook_calls[0]["payload"]
+
+    assert isinstance(payload["headline"], str) and payload["headline"]
+    advisory_block = payload["advisory"]
+    assert advisory_block["level"] == "Extreme" and advisory_block["level_index"] == 5
+    assert advisory_block["basis"] == "relative_to_local_weekly_normal"
+    assert advisory_block["color"] and advisory_block["advice"]
+    assert isinstance(payload["caveats"], list) and len(payload["caveats"]) >= 3
+    assert payload["location"] == {"name": None, "lat": 34.05, "lon": -118.24}
+    # The whole payload must survive JSON encoding (no NaN/Infinity, no numpy).
+    import json
+
+    encoded = json.dumps(payload, allow_nan=False)
+    assert "NaN" not in encoded and "Infinity" not in encoded
+
+
 def test_locally_normal_risk_does_not_breach_despite_high_absolute(store, webhook_calls, monkeypatch):
     # A dense-metro point whose absolute level is "extreme" but whose score sits
     # in the bottom quartile of its own weekly normal must NOT fire: that is the
@@ -326,6 +347,8 @@ def test_email_channel_breach_sends_email(store, monkeypatch):
     assert to_address == "driver@example.test"
     assert "risk alert" in subject.lower()
     assert watch["id"] in body
+    assert "Notes:" in body  # caveats are included
+    assert "You are receiving this" in body
     assert store.get_watch(watch["id"])["last_notified_at"] == NOW.isoformat()
 
 
@@ -372,6 +395,9 @@ def test_region_watch_breaches_on_regional_relative_level(store, webhook_calls, 
     assert payload["detail"]["region_id"] == "los_angeles"
     assert payload["detail"]["region_name"].startswith("Los Angeles")
     assert payload["detail"]["sample_count"] >= 1
+    # Richer payload carries the region as the location label.
+    assert payload["location"]["name"].startswith("Los Angeles")
+    assert payload["location"]["lat"] is not None and payload["location"]["lon"] is not None
 
 
 def test_region_watch_calm_region_does_not_breach(store, webhook_calls, monkeypatch):

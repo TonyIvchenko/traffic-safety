@@ -66,6 +66,17 @@ def _forecast_hours(params: dict, override: int | None) -> int:
     return int(params.get("forecast_hours", 0)) if override is None else int(override)
 
 
+def _frame_idx_from(result) -> int | None:
+    """Hour-of-week (0-167) from a live prediction's local day/hour, or None."""
+    if not isinstance(result, dict):
+        return None
+    dow = result.get("local_day_of_week")
+    hour = result.get("local_hour")
+    if isinstance(dow, int) and isinstance(hour, int):
+        return (dow - 1) * 24 + hour
+    return None
+
+
 def evaluate_point(params: dict, *, forecast_hours_override: int | None = None) -> dict:
     result = predict_traffic_safety_live(
         lat=float(params["lat"]),
@@ -77,6 +88,8 @@ def evaluate_point(params: dict, *, forecast_hours_override: int | None = None) 
         "risk_score": float(result["risk_score"]),
         "risk_level": result["risk_level"],
         "ref": {"lat": float(params["lat"]), "lon": float(params["lon"])},
+        "location_name": None,
+        "frame_idx": _frame_idx_from(result),
         "detail": {
             "weather_source": result.get("weather_source"),
             "live_provider": result.get("live_provider"),
@@ -102,6 +115,8 @@ def evaluate_route(params: dict, *, forecast_hours_override: int | None = None) 
         "risk_score": float(scored["route_risk_score_max"]),
         "risk_level": scored["route_risk_level"],
         "ref": {"lat": riskiest["lat"], "lon": riskiest["lon"]},
+        "location_name": None,
+        "frame_idx": None,
         "detail": {
             "distance_km": scored["distance_km"],
             "high_risk_fraction": scored["high_risk_fraction"],
@@ -133,6 +148,8 @@ def evaluate_area(params: dict, *, forecast_hours_override: int | None = None) -
         "risk_score": top_score,
         "risk_level": _risk_level(top_score),
         "ref": ref,
+        "location_name": (top["fullname"] if top else None),
+        "frame_idx": None,
         "detail": {
             "segment_count": result.get("count", 0),
             "riskiest_segment": (
@@ -155,8 +172,13 @@ def evaluate_region(params: dict, *, forecast_hours_override: int | None = None)
         result = predict_traffic_safety_live(
             lat=point_lat, lon=point_lon, forecast_hours=forecast_hours, provider=provider
         )
-        if "month" not in captured and isinstance(result, dict) and isinstance(result.get("month"), int):
-            captured["month"] = result["month"]
+        if isinstance(result, dict):
+            if "month" not in captured and isinstance(result.get("month"), int):
+                captured["month"] = result["month"]
+            if "frame_idx" not in captured:
+                frame = _frame_idx_from(result)
+                if frame is not None:
+                    captured["frame_idx"] = frame
         return result
 
     index = region_index.live_region_index(_predict, region)
@@ -170,11 +192,14 @@ def evaluate_region(params: dict, *, forecast_hours_override: int | None = None)
     # the breach is relative to that metro's normal — precomputed here rather than
     # via the point-based relative_assessment the other kinds use.
     relative = region_index.relative_advisory_from_profile(profile, value=live_score, region=region)
+    min_lat, max_lat, min_lon, max_lon = regions.region_bbox(region)
     return {
         "risk_score": live_score,
         "risk_level": _risk_level(live_score),
-        "ref": None,
+        "ref": {"lat": round((min_lat + max_lat) / 2, 6), "lon": round((min_lon + max_lon) / 2, 6)},
         "relative": relative,
+        "location_name": region["name"],
+        "frame_idx": captured.get("frame_idx"),
         "detail": {
             "region_id": region["id"],
             "region_name": region["name"],
@@ -307,47 +332,102 @@ def _cooldown_active(watch: dict, now: datetime) -> bool:
     return now - datetime.fromisoformat(last) < timedelta(minutes=int(watch["cooldown_minutes"]))
 
 
+def _advisory_summary(advisory_block, level) -> dict:
+    """The full advisory block for the alert, from the relative/advisory dict."""
+    if isinstance(advisory_block, dict):
+        return {
+            "level": advisory_block.get("level"),
+            "level_index": advisory_block.get("level_index"),
+            "color": advisory_block.get("color"),
+            "advice": advisory_block.get("advice"),
+            "message": advisory_block.get("message"),
+            "basis": advisory_block.get("basis", "absolute"),
+            "relative_descriptor": advisory_block.get("relative_descriptor"),
+            "percentile": advisory_block.get("percentile"),
+        }
+    return {
+        "level": str(level).title(),
+        "level_index": None,
+        "color": None,
+        "advice": None,
+        "message": None,
+        "basis": "absolute",
+        "relative_descriptor": None,
+        "percentile": None,
+    }
+
+
 def _alert_payload(watch: dict, now: datetime, assessment: dict) -> dict:
-    """The channel-independent alert body (also the webhook JSON)."""
+    """The channel-independent alert body (also the webhook JSON).
+
+    Carries a ready-to-use ``headline`` sentence, the full ``advisory`` block,
+    honest ``caveats`` and a ``location`` label so subscribers (and downstream
+    apps) do not have to reconstruct the prose from raw fields.
+    """
     level = assessment["level"]
-    relative = assessment["relative"]
     outcome = assessment["outcome"]
+    detail = outcome.get("detail") or {}
+    advisory_block = assessment["relative"] if isinstance(assessment["relative"], dict) else None
+    basis = advisory_block.get("basis", "absolute") if advisory_block else "absolute"
+    ref = outcome.get("ref") or {}
+    location = {
+        "name": outcome.get("location_name"),
+        "lat": ref.get("lat"),
+        "lon": ref.get("lon"),
+    }
+    headline = (
+        advisory_messages.compose(
+            advisory_block, location_name=location["name"], frame_idx=outcome.get("frame_idx")
+        )
+        if advisory_block
+        else f"{str(level).title()} road risk for your {watch['kind']} watch."
+    )
     return {
         "watch_id": watch["id"],
         "kind": watch["kind"],
         "evaluated_at_utc": now.isoformat(),
         "risk_score": outcome["risk_score"],
         "risk_level": level,
-        "percentile": relative.get("percentile") if relative else None,
-        "basis": relative.get("basis") if relative else "absolute",
-        "relative_descriptor": relative.get("relative_descriptor") if relative else None,
+        "headline": headline,
+        "advisory": _advisory_summary(advisory_block, level),
+        "caveats": advisory_messages.caveats(
+            mode="live", basis=basis, live_incomplete=bool(detail.get("failed_points"))
+        ),
+        "location": location,
+        "percentile": advisory_block.get("percentile") if advisory_block else None,
+        "basis": basis,
+        "relative_descriptor": advisory_block.get("relative_descriptor") if advisory_block else None,
         "lead_time_hours": assessment["lead_time_hours"],
         "horizon_hours": assessment["horizon_hours"],
         "forecast": assessment["forecast"],
         "threshold_level": watch["threshold_level"],
         "params": watch["params"],
-        "detail": {**outcome["detail"], "absolute_risk_level": outcome["risk_level"]},
+        "detail": {**detail, "absolute_risk_level": outcome["risk_level"]},
     }
 
 
-def _email_message(watch: dict, assessment: dict) -> tuple[str, str]:
-    """A plain-text subject/body for an email-channel alert."""
-    level = str(assessment["level"]).title()
-    kind = watch["kind"]
-    relative = assessment["relative"]
-    subject = f"[RoadRiskMonitor] {level} risk alert for your {kind} watch"
+def _email_message(watch: dict, payload: dict) -> tuple[str, str]:
+    """A plain-text subject/body built from a prepared alert ``payload``."""
+    advisory_block = payload["advisory"]
+    level = str(advisory_block.get("level") or payload["risk_level"]).title()
+    where = f" for {payload['location']['name']}" if payload["location"].get("name") else ""
+    subject = f"[RoadRiskMonitor] {level} risk alert{where} ({watch['kind']} watch)"
 
-    sentence = advisory_messages.compose(relative) if isinstance(relative, dict) else ""
-    lines = [sentence or f"{level} risk detected for your {kind} watch."]
-    lead = assessment.get("lead_time_hours")
+    lines = [payload["headline"]]
+    lead = payload.get("lead_time_hours")
     if lead:
         lines.append(
             f"Predicted about {int(lead)} hour(s) ahead "
-            f"(within a {int(assessment['horizon_hours'])}-hour forecast horizon)."
+            f"(within a {int(payload['horizon_hours'])}-hour forecast horizon)."
         )
+    if advisory_block.get("advice"):
+        lines.append(str(advisory_block["advice"]))
+    if payload.get("caveats"):
+        lines += ["", "Notes:"]
+        lines += [f"  - {caveat}" for caveat in payload["caveats"]]
     lines += [
         "",
-        f"Threshold: {watch['threshold_level']}  |  Watch ID: {watch['id']}",
+        f"Threshold: {payload['threshold_level']}  |  Watch ID: {watch['id']}",
         "You are receiving this because you subscribed to a RoadRiskMonitor risk watch.",
     ]
     return subject, "\n".join(lines)
@@ -355,13 +435,12 @@ def _email_message(watch: dict, assessment: dict) -> tuple[str, str]:
 
 def _deliver(watch: dict, now: datetime, assessment: dict) -> dict:
     """Deliver an alert over the watch's channel; returns a delivery record."""
+    payload = _alert_payload(watch, now, assessment)
     channel = watch["channel"]
     if channel == "webhook" and watch.get("webhook_url"):
-        return notify.post_webhook(
-            watch["webhook_url"], _alert_payload(watch, now, assessment), watch["webhook_secret"]
-        )
+        return notify.post_webhook(watch["webhook_url"], payload, watch["webhook_secret"])
     if channel == "email" and watch.get("email"):
-        subject, body = _email_message(watch, assessment)
+        subject, body = _email_message(watch, payload)
         return notify.send_email(watch["email"], subject, body)
     return {"delivered": False, "error": f"channel {channel!r} has no destination"}
 
