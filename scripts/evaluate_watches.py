@@ -39,6 +39,8 @@ if str(SRC_DIR) not in sys.path:
 import advisory
 import advisory_messages
 import notify
+import region_index
+import regions
 import risk_eval
 import segment_runtime
 from predict import (
@@ -140,7 +142,57 @@ def evaluate_area(params: dict, *, forecast_hours_override: int | None = None) -
     }
 
 
-EVALUATORS = {"point": evaluate_point, "route": evaluate_route, "area": evaluate_area}
+def evaluate_region(params: dict, *, forecast_hours_override: int | None = None) -> dict:
+    region = regions.get_region(params.get("region_id"))
+    if region is None:
+        raise ValueError(f"unknown region_id: {params.get('region_id')!r}")
+    forecast_hours = _forecast_hours(params, forecast_hours_override)
+    provider = params.get("provider", "auto")
+
+    captured: dict = {}
+
+    def _predict(point_lat, point_lon):
+        result = predict_traffic_safety_live(
+            lat=point_lat, lon=point_lon, forecast_hours=forecast_hours, provider=provider
+        )
+        if "month" not in captured and isinstance(result, dict) and isinstance(result.get("month"), int):
+            captured["month"] = result["month"]
+        return result
+
+    index = region_index.live_region_index(_predict, region)
+    if index is None or index["status"] != "ok":
+        raise RuntimeError(f"live weather unavailable across region {region['id']!r}")
+
+    live_score = float(index["risk_score"])
+    month = captured.get("month", datetime.now(timezone.utc).month)
+    profile = region_index.region_weekly_profile_batched(weekly_risk_profile, region, month=month)
+    # The region's own weekly climatology (p90 over its grid) is the reference, so
+    # the breach is relative to that metro's normal — precomputed here rather than
+    # via the point-based relative_assessment the other kinds use.
+    relative = region_index.relative_advisory_from_profile(profile, value=live_score, region=region)
+    return {
+        "risk_score": live_score,
+        "risk_level": _risk_level(live_score),
+        "ref": None,
+        "relative": relative,
+        "detail": {
+            "region_id": region["id"],
+            "region_name": region["name"],
+            "status": index["status"],
+            "sample_count": index["sample_count"],
+            "failed_points": index["failed_points"],
+            "risk_mean": index["risk_mean"],
+            "risk_p90": index["risk_p90"],
+        },
+    }
+
+
+EVALUATORS = {
+    "point": evaluate_point,
+    "route": evaluate_route,
+    "area": evaluate_area,
+    "region": evaluate_region,
+}
 
 
 def relative_breach(level_index, threshold_level) -> bool:
@@ -183,8 +235,16 @@ def _horizon_offsets(horizon_hours: int) -> list[int]:
 
 
 def _decide(outcome: dict, watch: dict, month: int):
-    """(level, breached, relative) for one scored outcome, relative with fallback."""
-    relative = relative_assessment(outcome["risk_score"], outcome.get("ref"), month=month)
+    """(level, breached, relative) for one scored outcome, relative with fallback.
+
+    An evaluator may precompute its own ``relative`` block (region watches score
+    against the metro's weekly normal); otherwise it is derived from the outcome's
+    reference point. Either way the breach falls back to the absolute level when
+    no usable local-normal reference exists.
+    """
+    relative = outcome.get("relative")
+    if relative is None:
+        relative = relative_assessment(outcome["risk_score"], outcome.get("ref"), month=month)
     if relative is not None and relative.get("basis") == "relative_to_local_weekly_normal":
         level = str(relative["level"]).lower()
         return level, relative_breach(relative["level_index"], watch["threshold_level"]), relative

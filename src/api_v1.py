@@ -344,8 +344,16 @@ def _validate_watch_params(kind: str, params: dict) -> dict:
                 raise ValueError("bounding box out of range")
             normalized["limit"] = max(1, min(1000, int(params.get("limit", 100))))
             normalized["forecast_hours"] = int(params.get("forecast_hours", 0))
+        elif kind == "region":
+            region_id = str(params.get("region_id", "")).strip().lower()
+            if regions.get_region(region_id) is None:
+                raise ValueError(f"unknown region_id: {region_id or '(missing)'}")
+            normalized = {
+                "region_id": region_id,
+                "forecast_hours": int(params.get("forecast_hours", 0)),
+            }
         else:
-            raise ValueError("kind must be 'point', 'route', or 'area'")
+            raise ValueError("kind must be 'point', 'route', 'area', or 'region'")
         # Forecast-horizon watches scan the next N hours and alert ahead of time;
         # 0 (the default) keeps the single-shot "evaluate now" behavior.
         normalized["horizon_hours"] = int(params.get("horizon_hours", 0))
@@ -915,7 +923,7 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             },
             "watches": {
                 "enabled": True,
-                "kinds": ["point", "route", "area"],
+                "kinds": ["point", "route", "area", "region"],
                 "channels": ["poll", "webhook", "email"],
                 "email_configured": notify.email_configured(),
                 "note": (

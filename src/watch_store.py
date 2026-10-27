@@ -20,7 +20,7 @@ SRC_DIR = Path(__file__).resolve().parent
 REPO_DIR = SRC_DIR.parent
 DEFAULT_DB_PATH = REPO_DIR / "data" / "watches.sqlite3"
 
-WATCH_KINDS = {"point", "route", "area"}
+WATCH_KINDS = {"point", "route", "area", "region"}
 WATCH_CHANNELS = {"poll", "webhook", "email"}
 LEVEL_ORDER = {"low": 0, "moderate": 1, "high": 2, "extreme": 3}
 

@@ -342,6 +342,61 @@ def test_email_delivery_failure_is_not_counted_as_notified(store, monkeypatch):
     assert store.get_watch(watch["id"])["last_notified_at"] is None
 
 
+# --------------------------------------------------------------------------- #
+# Region watches (H1.4): breach on a metro's live risk vs its own weekly normal.
+# --------------------------------------------------------------------------- #
+
+
+def _region_watch(store, **kwargs):
+    defaults = dict(
+        kind="region",
+        params={"region_id": "los_angeles", "forecast_hours": 0, "provider": "auto"},
+        threshold_level="high",
+        channel="webhook",
+        webhook_url="https://example.test/region-hook",
+    )
+    defaults.update(kwargs)
+    return store.create_watch(**defaults)
+
+
+def test_region_watch_breaches_on_regional_relative_level(store, webhook_calls, monkeypatch):
+    monkeypatch.setattr(ew, "predict_traffic_safety_live", _fake_point("extreme", 0.93))
+    _region_watch(store)
+
+    summary = ew.run_once(store, now=NOW)
+
+    assert summary["breached"] == 1 and summary["notified"] == 1
+    payload = webhook_calls[0]["payload"]
+    assert payload["basis"] == "relative_to_local_weekly_normal"
+    assert payload["risk_level"] == "extreme"
+    assert payload["detail"]["region_id"] == "los_angeles"
+    assert payload["detail"]["region_name"].startswith("Los Angeles")
+    assert payload["detail"]["sample_count"] >= 1
+
+
+def test_region_watch_calm_region_does_not_breach(store, webhook_calls, monkeypatch):
+    monkeypatch.setattr(ew, "predict_traffic_safety_live", _fake_point("moderate", 0.2))
+    watch = _region_watch(store)
+
+    summary = ew.run_once(store, now=NOW)
+
+    assert summary["breached"] == 0 and summary["notified"] == 0
+    assert webhook_calls == []
+    assert store.get_watch(watch["id"])["last_level"] == "low"
+
+
+def test_region_watch_unknown_region_is_error_not_breach(store, webhook_calls, monkeypatch):
+    monkeypatch.setattr(ew, "predict_traffic_safety_live", _fake_point("extreme", 0.93))
+    # The store does not validate region_id (the API does), so this reaches the
+    # evaluator and must be isolated as an error rather than a false alert.
+    _region_watch(store, params={"region_id": "atlantis", "provider": "auto"})
+
+    summary = ew.run_once(store, now=NOW)
+
+    assert summary == {"evaluated": 0, "breached": 0, "notified": 0, "errors": 1}
+    assert webhook_calls == []
+
+
 def test_horizon_offsets_span_window_and_cap_samples():
     assert ew._horizon_offsets(12) == [0, 2, 4, 6, 8, 10, 12]
     assert ew._horizon_offsets(6) == [0, 1, 2, 3, 4, 5, 6]

@@ -118,6 +118,21 @@ def test_watch_validation_errors(client):
     assert bad_provider.status_code == 400
 
 
+def test_region_watch_accepted_and_validated(client):
+    ok = client.post(
+        "/v1/watches",
+        json={"kind": "region", "params": {"region_id": "los_angeles"}, "threshold_level": "high"},
+    )
+    assert ok.status_code == 201
+    assert ok.json()["params"]["region_id"] == "los_angeles"
+
+    unknown = client.post(
+        "/v1/watches",
+        json={"kind": "region", "params": {"region_id": "atlantis"}},
+    )
+    assert unknown.status_code == 422
+
+
 def test_horizon_watch_accepted_and_range_checked(client):
     ok = client.post(
         "/v1/watches",
@@ -169,6 +184,6 @@ def test_email_watch_accepted_and_validated(client):
 def test_meta_documents_watches(client):
     payload = client.get("/v1/meta").json()
     assert payload["watches"]["enabled"] is True
-    assert set(payload["watches"]["kinds"]) == {"point", "route", "area"}
+    assert set(payload["watches"]["kinds"]) == {"point", "route", "area", "region"}
     assert "email" in payload["watches"]["channels"]
     assert "email_configured" in payload["watches"]
