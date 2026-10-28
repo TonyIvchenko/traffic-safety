@@ -1,9 +1,12 @@
 """Evaluate active risk watches and deliver webhook alerts on breaches.
 
-Meant to run on a schedule (cron/systemd timer), like refresh_segment_tiles.py:
+Runs either as a one-shot sweep (cron / systemd timer, like
+refresh_segment_tiles.py) or as a long-running daemon that sweeps on a fixed
+interval (systemd service). See docs/OPERATIONS.md for deployment.
 
-    python scripts/evaluate_watches.py            # evaluate + notify
-    python scripts/evaluate_watches.py --dry-run  # evaluate only
+    python scripts/evaluate_watches.py              # one sweep, evaluate + notify
+    python scripts/evaluate_watches.py --dry-run    # one sweep, evaluate only
+    python scripts/evaluate_watches.py --interval 300  # daemon: sweep every 5 min
 
 Each active watch is scored with the live predictors; the breach decision is
 *relative* — the current risk's percentile within the watched location's own
@@ -27,7 +30,9 @@ import argparse
 from datetime import datetime, timedelta, timezone
 import math
 from pathlib import Path
+import signal
 import sys
+import threading
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_DIR / "src"
@@ -486,21 +491,77 @@ def run_once(store: WatchStore, *, dry_run: bool = False, now: datetime | None =
     return summary
 
 
+# Set by SIGINT/SIGTERM so daemon mode finishes the current sweep then exits.
+_SHUTDOWN = threading.Event()
+
+
+def _request_shutdown(signum, _frame=None) -> None:
+    print(f"evaluate_watches: signal {signum} received; exiting after the current sweep")
+    _SHUTDOWN.set()
+
+
+def _install_signal_handlers() -> None:
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _request_shutdown)
+        except (ValueError, OSError):  # e.g. not running in the main thread
+            pass
+
+
+def _log_summary(summary: dict, *, now: datetime | None = None) -> None:
+    stamp = (now or datetime.now(timezone.utc)).isoformat()
+    print(
+        f"{stamp} evaluate_watches "
+        f"evaluated={summary['evaluated']} breached={summary['breached']} "
+        f"notified={summary['notified']} errors={summary['errors']}"
+    )
+
+
+def run_loop(store: WatchStore, *, interval: float, dry_run: bool = False,
+             iterations: int | None = None, wait=None) -> int:
+    """Sweep on a fixed interval until a shutdown signal (daemon mode).
+
+    Always runs at least one sweep, then waits ``interval`` seconds between
+    sweeps, returning early from the wait when a shutdown signal arrives. ``wait``
+    (defaults to the shutdown event's interruptible wait) and ``iterations`` are
+    injectable for tests. Returns the number of sweeps performed.
+    """
+    waiter = wait if wait is not None else _SHUTDOWN.wait
+    count = 0
+    while True:
+        _log_summary(run_once(store, dry_run=dry_run))
+        count += 1
+        if _SHUTDOWN.is_set() or (iterations is not None and count >= iterations):
+            break
+        waiter(max(0.0, float(interval)))
+    return count
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--db", type=Path, default=None, help="override the watch DB path")
     parser.add_argument("--dry-run", action="store_true", help="evaluate without notifying")
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        help="daemon mode: seconds between sweeps (omit for a single sweep)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     store = WatchStore(args.db) if args.db else get_default_store()
-    summary = run_once(store, dry_run=args.dry_run)
-    print(
-        f"evaluated={summary['evaluated']} breached={summary['breached']} "
-        f"notified={summary['notified']} errors={summary['errors']}"
-    )
+    if args.interval is not None:
+        if args.interval <= 0:
+            raise SystemExit("--interval must be greater than 0")
+        _install_signal_handlers()
+        print(f"evaluate_watches: daemon mode, interval={args.interval}s, dry_run={args.dry_run}")
+        run_loop(store, interval=args.interval, dry_run=args.dry_run)
+        print("evaluate_watches: stopped")
+    else:
+        _log_summary(run_once(store, dry_run=args.dry_run))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,15 @@
+# Fires the one-shot evaluation every 5 minutes. Enable with:
+#   systemctl enable --now roadrisk-evaluate-watches.timer
+# The cadence is your alert-latency floor; tune OnUnitActiveSec to taste.
+[Unit]
+Description=Run the RoadRiskMonitor watch evaluation every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=roadrisk-evaluate-watches.service
+
+[Install]
+WantedBy=timers.target

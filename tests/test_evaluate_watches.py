@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import signal
 import sys
 
 import pytest
@@ -465,3 +466,50 @@ def test_horizon_watch_quiet_window_does_not_breach(store, webhook_calls, monkey
     assert summary["breached"] == 0 and summary["notified"] == 0
     assert webhook_calls == []
     assert store.get_watch(watch["id"])["last_level"] == "low"
+
+
+# --------------------------------------------------------------------------- #
+# Daemon / scheduled-runner mode (H1.6)
+# --------------------------------------------------------------------------- #
+
+_EMPTY_SUMMARY = {"evaluated": 0, "breached": 0, "notified": 0, "errors": 0}
+
+
+def test_run_loop_runs_fixed_iterations_and_waits_between(store, monkeypatch):
+    sweeps = []
+    waits = []
+    monkeypatch.setattr(
+        ew, "run_once", lambda s, dry_run=False: sweeps.append(dry_run) or dict(_EMPTY_SUMMARY)
+    )
+    ew._SHUTDOWN.clear()
+
+    count = ew.run_loop(store, interval=5, dry_run=True, iterations=3, wait=lambda t: waits.append(t))
+
+    assert count == 3
+    assert sweeps == [True, True, True]  # dry_run is threaded through each sweep
+    assert waits == [5.0, 5.0]  # waits only *between* sweeps, not after the last
+
+
+def test_run_loop_exits_after_sweep_when_shutdown_already_set(store, monkeypatch):
+    sweeps = []
+    waits = []
+    monkeypatch.setattr(
+        ew, "run_once", lambda s, dry_run=False: sweeps.append(dry_run) or dict(_EMPTY_SUMMARY)
+    )
+    ew._SHUTDOWN.set()
+    try:
+        count = ew.run_loop(store, interval=60, wait=lambda t: waits.append(t))
+    finally:
+        ew._SHUTDOWN.clear()
+
+    assert count == 1  # one sweep, then the set event breaks before waiting
+    assert waits == []
+
+
+def test_request_shutdown_sets_event():
+    ew._SHUTDOWN.clear()
+    try:
+        ew._request_shutdown(signal.SIGTERM, None)
+        assert ew._SHUTDOWN.is_set()
+    finally:
+        ew._SHUTDOWN.clear()

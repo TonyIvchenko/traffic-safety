@@ -666,6 +666,22 @@ Without the mounts it still boots and serves the discovery, validation, and
 reference endpoints; `/v1/health` reports `model_ready=false` until the model is
 mounted.
 
+### Alerting (watches)
+
+Watches created via `/v1/watches` are evaluated by a separate scheduled process,
+`scripts/evaluate_watches.py`, which scores each active watch and delivers alerts
+on a breach:
+
+```bash
+python scripts/evaluate_watches.py              # one sweep, evaluate + notify
+python scripts/evaluate_watches.py --interval 300   # daemon: sweep every 5 min
+```
+
+Run it on a timer/cron, or as a daemon. systemd units are in
+[deploy/systemd/](deploy/systemd), and the full runbook — scheduling, SMTP/email
+config, monitoring, and failure modes — is in
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
+
 ## Files In This Folder
 
 - [main.py](src/main.py)

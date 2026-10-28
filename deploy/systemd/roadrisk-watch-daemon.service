@@ -1,0 +1,33 @@
+# Long-running alternative to the timer+oneshot pair: a single process that
+# sweeps every --interval seconds. Use this OR the timer, not both.
+# Adjust User, WorkingDirectory, the venv path and the Environment lines to your
+# host, then: systemctl daemon-reload. See docs/OPERATIONS.md.
+[Unit]
+Description=RoadRiskMonitor watch evaluation daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=roadrisk
+WorkingDirectory=/opt/traffic-safety
+Environment=TRAFFIC_SAFETY_WATCH_DB=/data/roadrisk/watches.sqlite3
+Environment=TRAFFIC_SAFETY_MODEL_PATH=/data/roadrisk/models/traffic_safety.joblib
+Environment=TRAFFIC_SAFETY_TILES_DIR=/data/roadrisk/tiles
+# Email delivery (optional): uncomment and set to enable the email channel.
+#Environment=TRAFFIC_SAFETY_SMTP_HOST=smtp.example.com
+#Environment=TRAFFIC_SAFETY_SMTP_USERNAME=alerts@example.com
+#Environment=TRAFFIC_SAFETY_SMTP_PASSWORD=change-me
+ExecStart=/opt/traffic-safety/.venv/bin/python scripts/evaluate_watches.py --interval 300
+Restart=on-failure
+RestartSec=10s
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/roadrisk
+
+[Install]
+WantedBy=multi-user.target
