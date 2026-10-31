@@ -1,0 +1,210 @@
+/* Citizen-facing Road Risk Advisory & Alerts page. Scoped under .alerts-shell so
+   it coexists with the operational map stylesheet (map.css) loaded site-wide. */
+.alerts-shell {
+  --alx-bg: #0d1117;
+  --alx-panel: #161b22;
+  --alx-panel-2: #1c2230;
+  --alx-border: #2a3344;
+  --alx-text: #e6edf3;
+  --alx-muted: #9aa7b4;
+  --alx-accent: #4c9aff;
+  --alx-low: #1a9850;
+  --alx-moderate: #a6d96a;
+  --alx-elevated: #fdae61;
+  --alx-high: #f46d43;
+  --alx-extreme: #d7191c;
+  color: var(--alx-text);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-bottom: 48px;
+}
+
+@media (prefers-color-scheme: light) {
+  .alerts-shell {
+    --alx-bg: #f6f8fa;
+    --alx-panel: #ffffff;
+    --alx-panel-2: #f0f3f7;
+    --alx-border: #d7dee6;
+    --alx-text: #1b2733;
+    --alx-muted: #5a6572;
+  }
+}
+
+.alerts-hero {
+  padding: 24px clamp(16px, 4vw, 48px) 0;
+}
+.alerts-hero h2 {
+  margin: 0 0 6px;
+  font-size: clamp(1.4rem, 3.4vw, 2.1rem);
+  line-height: 1.15;
+}
+.alerts-hero p {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--alx-muted);
+  line-height: 1.5;
+}
+.alerts-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+.alerts-controls button {
+  background: var(--alx-accent);
+  color: #06121f;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.alerts-controls button:hover { filter: brightness(1.08); }
+.alerts-frame { color: var(--alx-muted); font-size: 0.9rem; }
+
+.alerts-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 18px;
+  padding: 0 clamp(16px, 4vw, 48px);
+}
+@media (max-width: 860px) {
+  .alerts-stage { grid-template-columns: 1fr; }
+}
+
+.alerts-mapwrap {
+  background: var(--alx-panel);
+  border: 1px solid var(--alx-border);
+  border-radius: 14px;
+  padding: 14px;
+}
+#alerts-map {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+#alerts-map .state-outline {
+  fill: var(--alx-panel-2);
+  stroke: var(--alx-border);
+  stroke-width: 1;
+}
+#alerts-map .metro-dot {
+  stroke: rgba(0, 0, 0, 0.45);
+  stroke-width: 1;
+  cursor: pointer;
+  transition: r 0.12s ease;
+}
+#alerts-map .metro-dot:hover { stroke: var(--alx-text); stroke-width: 2; }
+#alerts-map .metro-dot.selected { stroke: var(--alx-text); stroke-width: 2.5; }
+
+.alerts-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 12px;
+  font-size: 0.82rem;
+  color: var(--alx-muted);
+}
+.alerts-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.alerts-legend i {
+  width: 12px; height: 12px; border-radius: 3px; display: inline-block;
+}
+
+.alerts-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+.alerts-detail {
+  background: var(--alx-panel);
+  border: 1px solid var(--alx-border);
+  border-radius: 14px;
+  padding: 16px;
+}
+.alerts-detail .detail-head {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+}
+.level-chip {
+  display: inline-flex; align-items: center;
+  padding: 4px 12px; border-radius: 999px;
+  font-weight: 700; color: #06121f; font-size: 0.9rem;
+}
+.alerts-detail h3 { margin: 0; font-size: 1.1rem; }
+.alerts-detail .detail-message { color: var(--alx-text); line-height: 1.5; margin: 6px 0; }
+.alerts-detail .detail-sub { color: var(--alx-muted); font-size: 0.86rem; }
+.alerts-detail .detail-compare { font-weight: 600; margin: 6px 0; }
+.alerts-detail .caveats { margin: 10px 0 0; padding-left: 18px; color: var(--alx-muted); font-size: 0.8rem; }
+.alerts-detail .caveats li { margin: 3px 0; }
+
+.alerts-ranklist {
+  list-style: none; margin: 0; padding: 0;
+  background: var(--alx-panel);
+  border: 1px solid var(--alx-border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.alerts-ranklist li {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; cursor: pointer;
+  border-top: 1px solid var(--alx-border);
+}
+.alerts-ranklist li:first-child { border-top: 0; }
+.alerts-ranklist li:hover { background: var(--alx-panel-2); }
+.alerts-ranklist li.selected { background: var(--alx-panel-2); }
+.alerts-ranklist .rank-dot { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.alerts-ranklist .rank-name { flex: 1; min-width: 0; }
+.alerts-ranklist .rank-level { color: var(--alx-muted); font-size: 0.82rem; }
+
+.alerts-subscribe {
+  margin: 0 clamp(16px, 4vw, 48px);
+  background: var(--alx-panel);
+  border: 1px solid var(--alx-border);
+  border-radius: 14px;
+  padding: 18px;
+}
+.alerts-subscribe h3 { margin: 0 0 4px; }
+.alerts-subscribe .sub-intro { color: var(--alx-muted); margin: 0 0 14px; max-width: 60ch; }
+.watch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.watch-field { display: flex; flex-direction: column; gap: 5px; }
+.watch-field label { font-size: 0.82rem; color: var(--alx-muted); }
+.watch-field select,
+.watch-field input {
+  background: var(--alx-panel-2);
+  border: 1px solid var(--alx-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--alx-text);
+  font: inherit;
+}
+.watch-actions { margin-top: 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.watch-actions button {
+  background: var(--alx-low); color: #06121f; border: 0;
+  border-radius: 8px; padding: 10px 18px; font-weight: 700; cursor: pointer;
+}
+.watch-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+#watch-result { margin-top: 14px; font-size: 0.9rem; }
+#watch-result .ok {
+  background: rgba(26, 152, 80, 0.12);
+  border: 1px solid var(--alx-low);
+  border-radius: 10px; padding: 12px;
+}
+#watch-result .err {
+  background: rgba(215, 25, 28, 0.12);
+  border: 1px solid var(--alx-extreme);
+  border-radius: 10px; padding: 12px;
+}
+#watch-result code {
+  background: var(--alx-panel-2); padding: 2px 6px; border-radius: 5px;
+  word-break: break-all;
+}
+
+.alerts-status {
+  margin: 0 clamp(16px, 4vw, 48px);
+  min-height: 1.2em;
+  color: var(--alx-muted);
+  font-size: 0.86rem;
+}
+.alerts-shell [hidden] { display: none !important; }

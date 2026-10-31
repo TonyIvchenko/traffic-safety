@@ -96,11 +96,18 @@ CONTACT_SUBMISSIONS_PATH = REPO_DIR / "data" / "contact_submissions.jsonl"
 STATIC_ASSET_VERSION = max(
     (STATIC_DIR / "map.css").stat().st_mtime_ns,
     (STATIC_DIR / "map.js").stat().st_mtime_ns,
+    (STATIC_DIR / "alerts.css").stat().st_mtime_ns,
+    (STATIC_DIR / "alerts.js").stat().st_mtime_ns,
 )
 
 MAP_ASSET_HREFS = {
     "css": f"/traffic-safety-static/map.css?v={STATIC_ASSET_VERSION}",
     "js": f"/traffic-safety-static/map.js?v={STATIC_ASSET_VERSION}",
+}
+
+ALERTS_ASSET_HREFS = {
+    "css": f"/traffic-safety-static/alerts.css?v={STATIC_ASSET_VERSION}",
+    "js": f"/traffic-safety-static/alerts.js?v={STATIC_ASSET_VERSION}",
 }
 
 TILE_SIZE = 256
@@ -393,6 +400,7 @@ def _page_config() -> dict[str, object]:
 def _site_nav(active_page: str) -> str:
     links = [
         ("map", "/map", "Map"),
+        ("alerts", "/alerts", "Advisory & Alerts"),
         ("about", "/about", "About"),
         ("contact", "/contact", "Contact"),
     ]
@@ -426,6 +434,7 @@ def _document_html(
     content: str,
     include_map_assets: bool = False,
     extra_script: str = "",
+    extra_head: str = "",
 ) -> str:
     map_script_tag = (
         f'<script src="{MAP_ASSET_HREFS["js"]}" defer></script>' if include_map_assets else ""
@@ -449,6 +458,7 @@ def _document_html(
     <title>{html.escape(title)}</title>
     <meta name="description" content="Road Risk Monitor turns incident history, road geometry, and live weather into a nationwide operational road-safety forecast.">
     <link rel="stylesheet" href="{MAP_ASSET_HREFS['css']}">
+    {extra_head}
     {analytics_script_tag}
     {map_script_tag}
   </head>
@@ -581,6 +591,98 @@ def _page_html() -> str:
         title="Road Risk Monitor | Map",
         content=_map_page_content(),
         include_map_assets=True,
+    )
+
+
+def _alerts_page_content() -> str:
+    config_blob = html.escape(json.dumps({"api_base": "/v1"}), quote=True)
+    return f"""
+    <div id="alerts-shell" class="alerts-shell" data-config="{config_blob}">
+      {_site_nav("alerts")}
+      <header class="alerts-hero">
+        <h2>Is it riskier than usual to drive right now?</h2>
+        <p>
+          Each metro is scored against its <em>own</em> typical week, so the level
+          tells you how unusual conditions are for that place and time &mdash; not
+          just that big cities are always busy. Pick a metro for a live reading and
+          to get an alert when risk climbs.
+        </p>
+        <div class="alerts-controls">
+          <button id="alerts-locate" type="button">Use my location</button>
+          <span id="alerts-frame" class="alerts-frame"></span>
+        </div>
+      </header>
+
+      <section class="alerts-stage">
+        <div class="alerts-mapwrap">
+          <svg id="alerts-map" viewBox="0 0 960 600" role="img"
+               aria-label="Map of US metros coloured by how unusual current driving risk is"></svg>
+          <div class="alerts-legend" aria-hidden="true">
+            <span><i style="background:#1a9850"></i>Low</span>
+            <span><i style="background:#a6d96a"></i>Moderate</span>
+            <span><i style="background:#fdae61"></i>Elevated</span>
+            <span><i style="background:#f46d43"></i>High</span>
+            <span><i style="background:#d7191c"></i>Extreme</span>
+          </div>
+        </div>
+        <aside class="alerts-side">
+          <div id="alerts-detail" class="alerts-detail" hidden></div>
+          <ol id="alerts-ranklist" class="alerts-ranklist" aria-label="Metros ranked by how unusual risk is now"></ol>
+        </aside>
+      </section>
+
+      <section id="alerts-subscribe" class="alerts-subscribe" hidden>
+        <h3>Get an alert for <span id="watch-region-name">this metro</span></h3>
+        <p class="sub-intro">
+          We'll evaluate this metro on a schedule and notify you when risk reaches
+          your threshold relative to its normal week. Alerts are anonymous &mdash;
+          you'll get a one-time token to manage or delete the alert.
+        </p>
+        <form id="watch-form">
+          <div class="watch-grid">
+            <div class="watch-field">
+              <label for="watch-threshold">Alert me at</label>
+              <select id="watch-threshold" name="threshold_level">
+                <option value="moderate">Moderate or above</option>
+                <option value="high" selected>High or above</option>
+                <option value="extreme">Extreme only</option>
+              </select>
+            </div>
+            <div class="watch-field">
+              <label for="watch-channel">Notify via</label>
+              <select id="watch-channel" name="channel">
+                <option value="poll" selected>Status page (no message)</option>
+                <option value="email">Email</option>
+                <option value="webhook">Webhook</option>
+              </select>
+            </div>
+            <div class="watch-field" id="watch-dest-field" hidden>
+              <label id="watch-dest-label" for="watch-dest">Destination</label>
+              <input id="watch-dest" name="destination" type="text" autocomplete="off">
+            </div>
+            <div class="watch-field">
+              <label for="watch-horizon">Look ahead (hours)</label>
+              <input id="watch-horizon" name="horizon_hours" type="number" min="0" max="48" value="0">
+            </div>
+          </div>
+          <div class="watch-actions">
+            <button type="submit">Create alert</button>
+          </div>
+        </form>
+        <div id="watch-result" role="status"></div>
+      </section>
+
+      <div id="alerts-status" class="alerts-status" role="status"></div>
+    </div>
+    """
+
+
+def _alerts_page_html() -> str:
+    return _document_html(
+        title="Road Risk Monitor | Advisory & Alerts",
+        content=_alerts_page_content(),
+        extra_head=f'<link rel="stylesheet" href="{ALERTS_ASSET_HREFS["css"]}">',
+        extra_script=f'<script src="{ALERTS_ASSET_HREFS["js"]}" defer></script>',
     )
 
 
@@ -1330,6 +1432,11 @@ def root() -> HTMLResponse:
 @api.get("/map", response_class=HTMLResponse)
 def map_page() -> HTMLResponse:
     return HTMLResponse(_map_html())
+
+
+@api.get("/alerts", response_class=HTMLResponse)
+def alerts_page() -> HTMLResponse:
+    return HTMLResponse(_alerts_page_html())
 
 
 @api.get("/about", response_class=HTMLResponse)
