@@ -112,6 +112,7 @@ controlled only by a per-client-IP rate limiter.
 | [Equity](#equity--justice40-overlay) | `/v1/equity/*` | SVI + Justice40 overlay, hotspots, disparity, choropleth |
 | [Countermeasures](#countermeasure-recommendations-fhwa-cmfs) | `/v1/countermeasures/*` | FHWA CMF treatments + benefit-cost for HIN segments |
 | [Road Risk Advisory](#road-risk-advisory-aqi-for-driving) | `/v1/advisory/*` | Relative "AQI for driving" — point, region, national |
+| [Proactive alerts](#proactive-alerts-watches) | `/v1/watches/*` | Subscribe to alerts when risk is unusual for a place/time (point/route/area/region) |
 | [Emergency](#emergency-response--evacuation) | `/v1/emergency/*` | Nearest facilities, evacuation routing, regional readiness |
 | [Open data](#open-data--validation) | `/v1/datasets/*`, `/v1/validation/*` | Dataset catalog + download, data-quality validation |
 | [Unified profile](#unified-location-profile) | `/v1/profile/*` | One call joining risk + equity + countermeasure + facility for a point or route |
@@ -423,6 +424,87 @@ instead of paying the first-request cost.
   is tolerated (the reading reflects the points that scored) and flagged.
 - Regions are approximate metro bounding boxes for screening, **not** official
   MSA boundaries. The advisory is guidance, not a guarantee of safety.
+
+## Proactive Alerts (watches)
+
+Instead of polling the advisory, subscribe to it. A **watch** is an anonymous
+subscription that a separate scheduled process evaluates, notifying you when risk
+crosses your threshold. Crucially, the breach decision is **relative** — the same
+percentile-within-its-own-normal basis as the advisory above — so an alert means
+"unusually risky *for this place and time*", not just "a big city at rush hour"
+(which would fire constantly). The citizen-facing `/alerts` page (served by the
+app) is a point-and-click UI over these endpoints.
+
+A watch has:
+
+- a **kind** — `point`, `route`, `area` (bounding box), or `region` (a metro from
+  the advisory catalog);
+- a **threshold** — `low` / `moderate` / `high` / `extreme` (the relative level
+  that triggers an alert);
+- a **channel** — `poll` (status only, read via `GET`), `webhook` (an
+  HMAC-signed `POST`), or `email` (needs a server SMTP relay);
+- an optional **look-ahead** — `horizon_hours` (0–48): scan the forecast and
+  alert *ahead* of time, reporting `lead_time_hours`;
+- a **cooldown** — minimum minutes between notifications.
+
+### Serve the subscription API (`/v1/watches`)
+
+| Method & path | Purpose |
+|---|---|
+| `POST /v1/watches` | Create a watch; returns the watch plus a one-time `token` (and `webhook_secret` for webhooks) |
+| `GET /v1/watches/{id}?token=…` | Status: last evaluated/level/breach/notification times (the poll channel) |
+| `PATCH /v1/watches/{id}?token=…` | Pause or resume (`{"active": false}`) |
+| `DELETE /v1/watches/{id}?token=…` | Delete the watch |
+
+The `token` returned at creation is the **only** credential — it is shown once and
+cannot be recovered, so store it. There is no account system.
+
+```bash
+# Alert me by email when Los Angeles is "high or above" relative to its own normal,
+# looking up to 6 hours ahead.
+curl -X POST "http://127.0.0.1:8080/v1/watches" \
+  -H 'Content-Type: application/json' \
+  -d '{"kind":"region","params":{"region_id":"los_angeles","horizon_hours":6},
+       "threshold_level":"high","channel":"email","email":"you@example.com"}'
+
+# Webhook watch for a commute route (HMAC-signed deliveries).
+curl -X POST "http://127.0.0.1:8080/v1/watches" \
+  -H 'Content-Type: application/json' \
+  -d '{"kind":"route","params":{"waypoints":[[-118.24,34.05],[-118.40,34.02]]},
+       "threshold_level":"high","channel":"webhook","webhook_url":"https://example.com/hook"}'
+
+# Check a watch, then delete it (token from the create response).
+curl "http://127.0.0.1:8080/v1/watches/<id>?token=<token>"
+curl -X DELETE "http://127.0.0.1:8080/v1/watches/<id>?token=<token>"
+```
+
+### Operating the evaluator
+
+The API never evaluates watches itself — run `scripts/evaluate_watches.py` on a
+schedule (systemd timer/cron) or as a daemon (`--interval SECONDS`):
+
+```bash
+python scripts/evaluate_watches.py              # one sweep, evaluate + notify
+python scripts/evaluate_watches.py --interval 300   # daemon: sweep every 5 min
+```
+
+systemd units are in [deploy/systemd/](deploy/systemd); the full runbook —
+scheduling, SMTP/email config, monitoring, and failure modes — is in
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+### Methodology & caveats
+
+- Breaches are **relative** to each location's own weekly normal; where there is
+  no usable local normal the decision falls back to the absolute level (the alert
+  payload carries `basis`). This is the same basis as the advisory above.
+- Watches are **anonymous** and authorized only by the per-watch token. The API
+  stores the submitted geometry and the webhook URL / email until the watch is
+  deleted.
+- Email delivery requires a configured SMTP relay; `GET /v1/meta` reports
+  `watches.email_configured`. Without one, email watches still evaluate but log
+  that delivery was skipped.
+- Alerts are guidance, not a guarantee of safety, and live evaluation depends on
+  third-party weather providers.
 
 ## Emergency Response & Evacuation
 

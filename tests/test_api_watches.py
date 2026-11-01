@@ -182,8 +182,14 @@ def test_email_watch_accepted_and_validated(client):
 
 
 def test_meta_documents_watches(client):
-    payload = client.get("/v1/meta").json()
-    assert payload["watches"]["enabled"] is True
-    assert set(payload["watches"]["kinds"]) == {"point", "route", "area", "region"}
-    assert "email" in payload["watches"]["channels"]
-    assert "email_configured" in payload["watches"]
+    watches = client.get("/v1/meta").json()["watches"]
+    assert watches["enabled"] is True
+    assert set(watches["kinds"]) == {"point", "route", "area", "region"}
+    assert "email" in watches["channels"]
+    assert "email_configured" in watches
+    # Horizon-1 capabilities are advertised so clients can discover them.
+    assert set(watches["threshold_levels"]) == {"low", "moderate", "high", "extreme"}
+    assert watches["breach_basis"] == "relative_to_local_weekly_normal"
+    assert watches["forecast_horizon_hours_max"] == 48
+    assert watches["ui"] == "/alerts"
+    assert "/v1/watches" in watches["endpoints"]

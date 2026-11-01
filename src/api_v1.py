@@ -925,12 +925,25 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 "enabled": True,
                 "kinds": ["point", "route", "area", "region"],
                 "channels": ["poll", "webhook", "email"],
+                "threshold_levels": ["low", "moderate", "high", "extreme"],
                 "email_configured": notify.email_configured(),
+                "breach_basis": "relative_to_local_weekly_normal",
+                "forecast_horizon_hours_max": 48,
+                "endpoints": [
+                    "/v1/watches",
+                    "/v1/watches/{id}",
+                ],
+                "ui": "/alerts",
                 "note": (
-                    "Watches store the submitted geometry and webhook URL or email "
-                    "until deleted; they are authorized only by the per-watch token "
-                    "returned at creation. Email delivery requires a server SMTP "
-                    "relay (email_configured reports whether one is set)."
+                    "Subscribe to proactive alerts: create a watch (POST /v1/watches), "
+                    "poll or manage it with the per-watch token returned once at "
+                    "creation. A separate scheduled evaluator scores each watch and "
+                    "breaches on how unusual risk is for that place/time (relative to "
+                    "its own weekly normal), not raw absolute risk. Set horizon_hours "
+                    "(0-48) to be alerted ahead of time. Channels: poll (status only), "
+                    "webhook (HMAC-signed), and email (requires a server SMTP relay; "
+                    "email_configured reports whether one is set). The /alerts page is "
+                    "a citizen-facing UI over these endpoints."
                 ),
             },
             "grants": {
