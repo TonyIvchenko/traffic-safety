@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "source": "Curated illustrative sample of road segments with approximate AADT (annual average daily traffic). For production, replace with the authoritative FHWA HPMS extract (functional system + AADT) via scripts/build_aadt_index.py, which writes data/processed/aadt_segments.parquet.",
+  "note": "Exposure layer for crashes-per-VMT normalization. 'aadt' is vehicles/day, 'functional_class' is one of interstate/freeway_expressway/principal_arterial/minor_arterial/collector/local, 'length_km' is the sampled segment length, coordinates are approximate midpoints for screening only. Values are illustrative, not measured.",
+  "segments": [
+    {"id": "la-i10-dtla", "name": "I-10 Santa Monica Fwy (DTLA)", "state": "CA", "lat": 34.0335, "lon": -118.2487, "aadt": 285000, "functional_class": "interstate", "length_km": 1.6, "year": 2022},
+    {"id": "la-i405-westla", "name": "I-405 San Diego Fwy (West LA)", "state": "CA", "lat": 34.0430, "lon": -118.4430, "aadt": 296000, "functional_class": "interstate", "length_km": 1.6, "year": 2022},
+    {"id": "la-wilshire", "name": "Wilshire Blvd", "state": "CA", "lat": 34.0618, "lon": -118.3090, "aadt": 42000, "functional_class": "principal_arterial", "length_km": 1.2, "year": 2022},
+    {"id": "la-local-echo", "name": "Echo Park Ave", "state": "CA", "lat": 34.0781, "lon": -118.2606, "aadt": 4200, "functional_class": "local", "length_km": 0.8, "year": 2022},
+    {"id": "sf-i80-bay", "name": "I-80 Bay Bridge approach", "state": "CA", "lat": 37.7897, "lon": -122.3889, "aadt": 260000, "functional_class": "interstate", "length_km": 1.5, "year": 2022},
+    {"id": "sf-market", "name": "Market St", "state": "CA", "lat": 37.7796, "lon": -122.4147, "aadt": 28000, "functional_class": "principal_arterial", "length_km": 1.0, "year": 2022},
+    {"id": "sf-us101", "name": "US-101 Central Fwy", "state": "CA", "lat": 37.7701, "lon": -122.4106, "aadt": 210000, "functional_class": "freeway_expressway", "length_km": 1.4, "year": 2022},
+    {"id": "ny-i495-mid", "name": "I-495 Long Island Expwy", "state": "NY", "lat": 40.7420, "lon": -73.8900, "aadt": 180000, "functional_class": "interstate", "length_km": 1.6, "year": 2021},
+    {"id": "ny-broadway", "name": "Broadway (Manhattan)", "state": "NY", "lat": 40.7549, "lon": -73.9870, "aadt": 24000, "functional_class": "principal_arterial", "length_km": 0.9, "year": 2021},
+    {"id": "ny-fdr", "name": "FDR Drive", "state": "NY", "lat": 40.7610, "lon": -73.9580, "aadt": 160000, "functional_class": "freeway_expressway", "length_km": 1.3, "year": 2021},
+    {"id": "chi-i90-94", "name": "I-90/94 Dan Ryan Expwy", "state": "IL", "lat": 41.8450, "lon": -87.6360, "aadt": 300000, "functional_class": "interstate", "length_km": 1.6, "year": 2022},
+    {"id": "chi-michigan", "name": "Michigan Ave", "state": "IL", "lat": 41.8827, "lon": -87.6244, "aadt": 31000, "functional_class": "principal_arterial", "length_km": 1.0, "year": 2022},
+    {"id": "hou-i610", "name": "I-610 West Loop", "state": "TX", "lat": 29.7460, "lon": -95.4610, "aadt": 330000, "functional_class": "interstate", "length_km": 1.6, "year": 2022},
+    {"id": "hou-westheimer", "name": "Westheimer Rd", "state": "TX", "lat": 29.7420, "lon": -95.4640, "aadt": 56000, "functional_class": "principal_arterial", "length_km": 1.1, "year": 2022},
+    {"id": "phx-i10", "name": "I-10 Papago Fwy", "state": "AZ", "lat": 33.4580, "lon": -112.0870, "aadt": 250000, "functional_class": "interstate", "length_km": 1.6, "year": 2022},
+    {"id": "phx-camelback", "name": "Camelback Rd", "state": "AZ", "lat": 33.5090, "lon": -112.0740, "aadt": 38000, "functional_class": "minor_arterial", "length_km": 1.0, "year": 2022},
+    {"id": "sea-i5", "name": "I-5 (Downtown Seattle)", "state": "WA", "lat": 47.6000, "lon": -122.3270, "aadt": 274000, "functional_class": "interstate", "length_km": 1.5, "year": 2021},
+    {"id": "sea-aurora", "name": "Aurora Ave N (SR-99)", "state": "WA", "lat": 47.6500, "lon": -122.3470, "aadt": 42000, "functional_class": "principal_arterial", "length_km": 1.1, "year": 2021},
+    {"id": "den-i25", "name": "I-25 (Central Denver)", "state": "CO", "lat": 39.7220, "lon": -104.9870, "aadt": 230000, "functional_class": "interstate", "length_km": 1.5, "year": 2022},
+    {"id": "den-colfax", "name": "E Colfax Ave", "state": "CO", "lat": 39.7400, "lon": -104.9700, "aadt": 26000, "functional_class": "minor_arterial", "length_km": 1.0, "year": 2022},
+    {"id": "atl-i75-85", "name": "I-75/85 Downtown Connector", "state": "GA", "lat": 33.7620, "lon": -84.3890, "aadt": 340000, "functional_class": "interstate", "length_km": 1.6, "year": 2022},
+    {"id": "atl-peachtree", "name": "Peachtree St", "state": "GA", "lat": 33.7720, "lon": -84.3850, "aadt": 23000, "functional_class": "principal_arterial", "length_km": 1.0, "year": 2022},
+    {"id": "mia-i95", "name": "I-95 (Downtown Miami)", "state": "FL", "lat": 25.7850, "lon": -80.2050, "aadt": 280000, "functional_class": "interstate", "length_km": 1.6, "year": 2022},
+    {"id": "mia-biscayne", "name": "Biscayne Blvd (US-1)", "state": "FL", "lat": 25.7900, "lon": -80.1890, "aadt": 49000, "functional_class": "principal_arterial", "length_km": 1.1, "year": 2022}
+  ]
+}

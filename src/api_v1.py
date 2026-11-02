@@ -25,6 +25,7 @@ import advisory
 import advisory_messages
 import datasets as datasets_catalog
 import evacuation
+import exposure
 import facilities
 import grant_html
 import notify
@@ -232,6 +233,7 @@ class V1Dependencies:
     cell_weekly_profile_provider: Callable[..., object]
     region_weekly_profile_provider: Callable[..., object]
     facility_provider: Callable[[], object]
+    aadt_provider: Callable[[], object]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -1042,6 +1044,19 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "are straight-line."
                 ),
             },
+            "exposure": {
+                "enabled": True,
+                "aadt_segments": len(deps.aadt_provider()),
+                "endpoints": ["/v1/exposure/point"],
+                "functional_classes": list(exposure.FUNCTIONAL_CLASS_AADT),
+                "source": "fhwa_hpms",
+                "note": (
+                    "Traffic exposure (AADT) for crashes-per-VMT normalization: a nearby "
+                    "mapped HPMS segment, else a functional-class default. The shipped "
+                    "index is a curated illustrative sample; build the real one from an "
+                    "HPMS extract with scripts/build_aadt_index.py."
+                ),
+            },
             "datasets": {
                 "enabled": True,
                 "count": len(datasets_catalog.DATASETS),
@@ -1602,6 +1617,50 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 f"{MAX_CORRIDOR_EQUITY_SAMPLES} points, and the nearest facilities to the "
                 "trip ends. Not turn-by-turn guidance.",
             ],
+        }
+
+    @router.get(
+        "/exposure/point",
+        summary="Traffic exposure (AADT) for a location — the denominator for crashes per VMT",
+    )
+    def exposure_point(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+        functional_class: str | None = Query(
+            None, description="fallback road class if no HPMS segment is nearby"
+        ),
+        match_radius_km: float = Query(
+            exposure.DEFAULT_MATCH_RADIUS_KM,
+            gt=0.0,
+            le=25.0,
+            description="how far to look for a mapped AADT segment",
+        ),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        result = deps.aadt_provider().lookup(
+            lat, lon, functional_class=functional_class, max_km=match_radius_km
+        )
+        aadt = result["aadt"]
+        # Show the exposure on a nominal 1 km segment so the normalization is legible.
+        annual_vmt_per_km = exposure.annual_vmt(aadt, 1.0) if aadt is not None else None
+        return {
+            "lat": lat,
+            "lon": lon,
+            "aadt": aadt,
+            "basis": result["basis"],
+            "distance_km": result["distance_km"],
+            "functional_class": result["functional_class"],
+            "segment_name": result["segment_name"],
+            "source_year": result["source_year"],
+            "annual_vmt_per_km": annual_vmt_per_km,
+            "source": "fhwa_hpms",
+            "note": (
+                "AADT (vehicles/day) is the exposure denominator: crash risk is best "
+                "read per million VMT (AADT x length x days). basis 'hpms_segment' is a "
+                "nearby mapped segment, 'class_default' a functional-class median, "
+                "'unavailable' when neither is known."
+            ),
         }
 
     @router.get(
