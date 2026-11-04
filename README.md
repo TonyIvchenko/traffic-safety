@@ -241,6 +241,12 @@ GEOIDs are 2-digit (state), 5-digit (county), or 11-digit (census tract);
   `Severity` field is traffic impact, not injury severity, and is deliberately
   not used for the HIN.
 - **Crash costs:** FHWA comprehensive KABCO costs (2016 USD, `FHWA-SA-17-071`).
+- **Systemic risk** is reported two ways: `systemic_score` (crashes per km) and,
+  when the dataset is built with AADT/VMT, `systemic_score_exposure` /
+  `systemic_rate_mvmt` (crashes per **million VMT**). The exposure-normalized view
+  separates "how dangerous per unit of travel" from "how much traffic", so a busy
+  road is not flagged merely for carrying more vehicles. AADT comes from FHWA HPMS
+  (`GET /v1/exposure/point`; build the index with `scripts/build_aadt_index.py`).
 - **Benefit-cost** currently applies a **placeholder** crash-reduction factor and
   a nominal per-km treatment cost; corridor-specific Crash Modification Factors
   (from the countermeasures work) are intended to replace the placeholder.

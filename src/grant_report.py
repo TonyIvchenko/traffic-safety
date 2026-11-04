@@ -60,11 +60,15 @@ DATA_SOURCES = [
 _GEOID_LEVEL = {2: "state", 5: "county", 11: "tract"}
 _HIN_FIELDS = [
     "segment_id", "fullname", "rttyp", "mtfcc", "length_km",
-    "fatal_crashes", "hin_intensity", "hin_rank", "center_lat", "center_lon",
+    "fatal_crashes", "hin_intensity", "hin_rank",
+    "systemic_score_exposure", "center_lat", "center_lon",
 ]
 _SYSTEMIC_FIELDS = [
     "segment_id", "fullname", "rttyp", "mtfcc", "length_km",
     "systemic_score", "systemic_rate", "systemic_expected_crashes",
+    # Exposure-normalized (crashes per million VMT); present when the dataset was
+    # built with AADT/VMT (see systemic.attach_vmt). Absent fields are dropped.
+    "systemic_rate_mvmt", "systemic_score_exposure",
     "center_lat", "center_lon",
 ]
 

@@ -44,7 +44,8 @@ def _report(**overrides) -> dict:
             {
                 "segment_id": "c", "fullname": "New Rd", "rttyp": "I", "mtfcc": "S1100",
                 "length_km": 2.0, "systemic_score": 0.95, "systemic_rate": 0.6,
-                "systemic_expected_crashes": 1.2, "center_lat": 34.2, "center_lon": -118.4,
+                "systemic_expected_crashes": 1.2, "systemic_rate_mvmt": 0.1,
+                "systemic_score_exposure": 0.12, "center_lat": 34.2, "center_lon": -118.4,
             },
         ],
         "methodology": {"high_injury_network": "Ranked by weighted crashes per km."},
@@ -94,6 +95,20 @@ def test_render_report_includes_corridor_and_systemic_rows():
     assert "Main St" in out  # HIN corridor
     assert "New Rd" in out  # systemic location
     assert "U / S1200" in out  # route/class label
+
+
+def test_systemic_table_shows_exposure_score_and_dashes_when_absent():
+    out = gh.render_report(_report())
+    assert "Exposure score" in out
+    assert "0.120" in out  # the provided systemic_score_exposure renders
+
+    report = _report()
+    report["systemic_locations"] = [
+        {"segment_id": "d", "fullname": "No Exp Rd", "systemic_score": 0.5}
+    ]
+    bare = gh.render_report(report)
+    assert "No Exp Rd" in bare
+    assert "—" in bare  # an em dash, not a misleading 0, when exposure is absent
 
 
 def test_render_report_omits_benefit_cost_when_absent():

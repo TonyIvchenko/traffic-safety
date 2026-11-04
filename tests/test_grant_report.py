@@ -42,6 +42,8 @@ def _segments() -> pd.DataFrame:
             "systemic_score": [0.9, 0.8, 0.95, 0.2],
             "systemic_rate": [0.5, 0.4, 0.6, 0.05],
             "systemic_expected_crashes": [0.5, 0.4, 1.2, 0.05],
+            "systemic_rate_mvmt": [0.3, 0.2, 0.1, 0.8],
+            "systemic_score_exposure": [0.4, 0.25, 0.12, 1.0],
             "center_lat": [34.0, 34.1, 34.2, 34.3],
             "center_lon": [-118.0, -118.1, -118.2, -118.3],
         }
@@ -81,6 +83,23 @@ def test_top_systemic_locations_are_history_poor():
     # Only zero-history segments, ranked by systemic score (sys1=0.95 > sys2=0.2).
     assert [loc["segment_id"] for loc in locations] == ["sys1", "sys2"]
     assert locations[0]["systemic_score"] == 0.95
+
+
+def test_systemic_locations_carry_exposure_fields_when_present():
+    locations = gr.top_systemic_locations(_segments(), top_n=10)
+    assert locations[0]["systemic_rate_mvmt"] == 0.1
+    assert locations[0]["systemic_score_exposure"] == 0.12
+    # HIN corridors carry the exposure score too (when present on the frame).
+    corridors = gr.top_hin_corridors(_segments(), top_n=10)
+    assert corridors[0]["systemic_score_exposure"] == 0.4
+
+
+def test_systemic_locations_omit_exposure_fields_when_absent():
+    # A dataset built without AADT/VMT simply lacks the columns; records drop them.
+    frame = _segments().drop(columns=["systemic_rate_mvmt", "systemic_score_exposure"])
+    locations = gr.top_systemic_locations(frame, top_n=10)
+    assert "systemic_score_exposure" not in locations[0]
+    assert "systemic_score" in locations[0]  # the per-km score still flows
 
 
 def test_assemble_report_structure_and_json_serializable():

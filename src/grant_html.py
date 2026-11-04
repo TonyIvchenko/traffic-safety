@@ -250,21 +250,30 @@ def _hin_section(report: dict) -> str:
 
 def _systemic_section(report: dict) -> str:
     locations = _as_list(report.get("systemic_locations"))
+
+    def _exposure_score(location: dict) -> str:
+        value = location.get("systemic_score_exposure")
+        return _num(value, 3) if value is not None else "—"
+
     rows = [
         [
             location.get("fullname") or "Unnamed road",
             _route_label(location),
             _num(location.get("length_km", 0), 2),
             _num(location.get("systemic_score", 0), 3),
+            _exposure_score(location),
             _num(location.get("systemic_rate", 0), 3),
             _num(location.get("systemic_expected_crashes", 0), 2),
         ]
         for location in locations
     ]
     table = _html_table(
-        ["Road", "Route / class", "Length (km)", "Systemic score", "Rate / km", "Expected crashes"],
+        [
+            "Road", "Route / class", "Length (km)", "Systemic score",
+            "Exposure score", "Rate / km", "Expected crashes",
+        ],
         rows,
-        num_cols=(2, 3, 4, 5),
+        num_cols=(2, 3, 4, 5, 6),
         empty="No systemic risk locations.",
     )
     return (
