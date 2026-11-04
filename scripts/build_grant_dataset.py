@@ -220,8 +220,11 @@ def main() -> None:
         return
 
     network = pd.read_parquet(HIGH_INJURY_NETWORK_PATH)
-    rates = systemic.systemic_rates(network)
-    network = systemic.apply_systemic_scores(network, rates)
+    # Exposure-normalize: attach AADT/VMT so the systemic scoring also reports
+    # crashes per million VMT (alongside the per-km rate it has always produced).
+    network = systemic.attach_vmt(network)
+    rates = systemic.systemic_rates(network, vmt_col="vmt")
+    network = systemic.apply_systemic_scores(network, rates, vmt_col="vmt")
 
     county_index = load_county_index()
     if GEOID_COL not in network.columns:
