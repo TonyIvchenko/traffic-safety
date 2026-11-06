@@ -234,6 +234,7 @@ class V1Dependencies:
     region_weekly_profile_provider: Callable[..., object]
     facility_provider: Callable[[], object]
     aadt_provider: Callable[[], object]
+    vru_provider: Callable[[], object]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -1044,6 +1045,17 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "are straight-line."
                 ),
             },
+            "vru": {
+                "enabled": deps.vru_provider().ready,
+                "model_version": deps.vru_provider().model_version,
+                "target": deps.vru_provider().target,
+                "endpoints": ["/v1/vru/point", "/v1/vru/point/weekly"],
+                "note": (
+                    "Pedestrian/cyclist crash-risk layer from FARS VRU-only history, "
+                    "served alongside the all-crash model. Climatological; when the VRU "
+                    "model is not installed the endpoints answer out-of-coverage (risk 0)."
+                ),
+            },
             "exposure": {
                 "enabled": True,
                 "aadt_segments": len(deps.aadt_provider()),
@@ -1661,6 +1673,68 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 "nearby mapped segment, 'class_default' a functional-class median, "
                 "'unavailable' when neither is known."
             ),
+        }
+
+    @router.get(
+        "/vru/point",
+        summary="Pedestrian/cyclist (VRU) crash risk at a point and time (climatological)",
+    )
+    def vru_point(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+        day_of_week: int = Query(1, ge=1, le=7, description="Monday=1..Sunday=7"),
+        hour: int = Query(0, ge=0, le=23, description="local hour 0-23"),
+        month: int = Query(1, ge=1, le=12),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        result = deps.vru_provider().score_point(
+            lat, lon, day_of_week=day_of_week, hour=hour, month=month
+        )
+        result["caveats"] = [
+            "Risk of a crash involving a pedestrian or cyclist, from FARS VRU-only "
+            "history — separate from the all-crash model.",
+            "Climatological (typical conditions for the hour/season), not live.",
+            "Out-of-coverage points (no VRU candidate cell) return risk 0.",
+        ]
+        return result
+
+    @router.get(
+        "/vru/point/weekly",
+        summary="VRU risk across the full week at a point + safest/riskiest hour",
+    )
+    def vru_point_weekly(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+        month: int = Query(1, ge=1, le=12),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        layer = deps.vru_provider()
+        profile = layer.weekly_profile(lat, lon, month=month)
+        in_coverage = any(value > 0.0 for value in profile)
+
+        def _frame(idx: int) -> dict:
+            label = deps.frame_labels[idx] if 0 <= idx < len(deps.frame_labels) else str(idx)
+            return {"frame_idx": idx, "frame_label": label, "risk_score": profile[idx]}
+
+        safest = min(range(len(profile)), key=lambda i: profile[i]) if profile else 0
+        riskiest = max(range(len(profile)), key=lambda i: profile[i]) if profile else 0
+        return {
+            "layer": "vru",
+            "target": layer.target,
+            "model_version": layer.model_version,
+            "lat": float(lat),
+            "lon": float(lon),
+            "month": max(1, min(12, int(month))),
+            "in_coverage": in_coverage,
+            "profile": profile,
+            "safest_hour": _frame(safest),
+            "riskiest_hour": _frame(riskiest),
+            "caveats": [
+                "Pedestrian/cyclist crash risk by hour of week (climatological).",
+                "Out-of-coverage points return an all-zero profile.",
+            ],
         }
 
     @router.get(

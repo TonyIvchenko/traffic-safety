@@ -46,8 +46,12 @@ CELL_INDEX = {
 }
 
 
-def _risk_level(probability: float) -> str:
-    quantiles = MODEL_BUNDLE.get("risk_quantiles")
+def risk_level_for(probability: float, quantiles) -> str:
+    """Map a probability to low/moderate/high/extreme using a bundle's quantiles.
+
+    Falls back to fixed thresholds when ``quantiles`` is missing/malformed, so an
+    alternate layer (e.g. the VRU model) can reuse this with its own quantiles.
+    """
     if (
         isinstance(quantiles, list)
         and len(quantiles) >= 3
@@ -70,6 +74,10 @@ def _risk_level(probability: float) -> str:
     return "extreme"
 
 
+def _risk_level(probability: float) -> str:
+    return risk_level_for(probability, MODEL_BUNDLE.get("risk_quantiles"))
+
+
 def _bundle_array(key: str, dtype: np.dtype | type, default: object | None = None) -> np.ndarray:
     value = MODEL_BUNDLE.get(key, default)
     if value is None:
@@ -87,15 +95,24 @@ def _coverage_log_max() -> float:
 _COVERAGE_LOG_MAX = _coverage_log_max()
 
 
+def coverage_confidence_for(historical_cell_events: float, log_max: float) -> float:
+    """A 0-1 confidence proxy from crash history, normalized by ``log_max``.
+
+    ``log_max`` is ``log1p`` of the busiest cell's count in some bundle; an
+    alternate layer passes its own so the proxy is scaled to that layer.
+    """
+    if log_max <= 0.0:
+        return 0.0
+    return float(min(1.0, np.log1p(max(0.0, float(historical_cell_events))) / log_max))
+
+
 def coverage_confidence(historical_cell_events: float) -> float:
     """A 0-1 confidence proxy from how much crash history backs a cell.
 
     Mirrors the overlay confidence grid: log1p(events) normalized by the busiest
     cell in the bundle. Sparse/out-of-coverage cells return ~0.
     """
-    if _COVERAGE_LOG_MAX <= 0.0:
-        return 0.0
-    return float(min(1.0, np.log1p(max(0.0, float(historical_cell_events))) / _COVERAGE_LOG_MAX))
+    return coverage_confidence_for(historical_cell_events, _COVERAGE_LOG_MAX)
 
 
 # Feature-row column groups used for marginal-attribution explanations. Indices

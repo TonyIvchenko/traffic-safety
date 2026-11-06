@@ -86,6 +86,7 @@ from equity import equity_for_tract as _equity_for_tract
 from equity import load_equity_overlay as _get_equity_overlay
 from exposure import load_aadt_store as _get_aadt_store
 from facilities import load_facility_store as _get_facility_store
+from vru_runtime import load_vru_layer as _get_vru_layer
 from geo_lookup import tract_of as _tract_of
 from grant_store import get_default_store as _get_grant_store
 from watch_store import get_default_store as _get_watch_store
@@ -1285,6 +1286,7 @@ api.include_router(
             region_weekly_profile_provider=_region_weekly_profile_provider,
             facility_provider=_get_facility_store,
             aadt_provider=_get_aadt_store,
+            vru_provider=_get_vru_layer,
         )
     )
 )
