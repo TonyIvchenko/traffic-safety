@@ -1,0 +1,107 @@
+{
+  "type": "FeatureCollection",
+  "road_event_feed_info": {
+    "feed_info_id": "roadriskmonitor-reference-sample",
+    "update_frequency": 86400,
+    "version": "4.2",
+    "note": "Curated illustrative WZDx-shaped sample for development. Replace with a live WZDx feed (https://www.transportation.gov/wzdx) via scripts/download_wzdx.py and TRAFFIC_SAFETY_WZDX_PATH. Dates span a broad window so events read as active; geometry/impact are illustrative, not real."
+  },
+  "features": [
+    {
+      "id": "wz-la-i10-001",
+      "type": "Feature",
+      "geometry": {"type": "LineString", "coordinates": [[-118.2520, 34.0330], [-118.2450, 34.0340]]},
+      "properties": {
+        "core_details": {
+          "event_type": "work-zone",
+          "road_names": ["I-10", "Santa Monica Fwy"],
+          "direction": "eastbound",
+          "description": "Bridge deck rehabilitation; two left lanes closed overnight."
+        },
+        "vehicle_impact": "some-lanes-closed",
+        "start_date": "2026-01-15T00:00:00Z",
+        "end_date": "2027-12-31T23:59:59Z"
+      }
+    },
+    {
+      "id": "wz-sf-us101-002",
+      "type": "Feature",
+      "geometry": {"type": "LineString", "coordinates": [[-122.4120, 37.7695], [-122.4090, 37.7710]]},
+      "properties": {
+        "core_details": {
+          "event_type": "work-zone",
+          "road_names": ["US-101", "Central Fwy"],
+          "direction": "northbound",
+          "description": "Pavement resurfacing; alternating one-way control."
+        },
+        "vehicle_impact": "alternating-one-way",
+        "start_date": "2026-03-01T00:00:00Z",
+        "end_date": "2027-06-30T23:59:59Z"
+      }
+    },
+    {
+      "id": "wz-ny-fdr-003",
+      "type": "Feature",
+      "geometry": {"type": "LineString", "coordinates": [[-73.9590, 40.7600], [-73.9570, 40.7620]]},
+      "properties": {
+        "core_details": {
+          "event_type": "work-zone",
+          "road_names": ["FDR Drive"],
+          "direction": "southbound",
+          "description": "Full closure for structural inspection, nightly."
+        },
+        "vehicle_impact": "all-lanes-closed",
+        "start_date": "2026-02-01T00:00:00Z",
+        "end_date": "2027-12-31T23:59:59Z"
+      }
+    },
+    {
+      "id": "wz-chi-i90-004",
+      "type": "Feature",
+      "geometry": {"type": "LineString", "coordinates": [[-87.6370, 41.8440], [-87.6350, 41.8460]]},
+      "properties": {
+        "core_details": {
+          "event_type": "work-zone",
+          "road_names": ["I-90/94", "Dan Ryan Expwy"],
+          "direction": "northbound",
+          "description": "Shoulder reconstruction; traffic shifted left."
+        },
+        "vehicle_impact": "all-lanes-open-shift-left",
+        "start_date": "2026-04-01T00:00:00Z",
+        "end_date": "2027-10-31T23:59:59Z"
+      }
+    },
+    {
+      "id": "wz-hou-i610-005",
+      "type": "Feature",
+      "geometry": {"type": "LineString", "coordinates": [[-95.4620, 29.7450], [-95.4600, 29.7470]]},
+      "properties": {
+        "core_details": {
+          "event_type": "work-zone",
+          "road_names": ["I-610", "West Loop"],
+          "direction": "southbound",
+          "description": "Ramp reconstruction; one lane closed."
+        },
+        "vehicle_impact": "some-lanes-closed",
+        "start_date": "2026-05-01T00:00:00Z",
+        "end_date": "2027-12-31T23:59:59Z"
+      }
+    },
+    {
+      "id": "wz-sea-i5-006-expired",
+      "type": "Feature",
+      "geometry": {"type": "LineString", "coordinates": [[-122.3280, 47.5990], [-122.3260, 47.6010]]},
+      "properties": {
+        "core_details": {
+          "event_type": "work-zone",
+          "road_names": ["I-5"],
+          "direction": "northbound",
+          "description": "Completed guardrail replacement (historical/expired event)."
+        },
+        "vehicle_impact": "all-lanes-open",
+        "start_date": "2026-01-01T00:00:00Z",
+        "end_date": "2026-02-01T23:59:59Z"
+      }
+    }
+  ]
+}

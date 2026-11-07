@@ -30,6 +30,7 @@ import facilities
 import grant_html
 import notify
 import source_catalog
+import work_zones
 import validation
 from live_weather import LiveWeatherProviderError
 import region_index
@@ -235,6 +236,7 @@ class V1Dependencies:
     facility_provider: Callable[[], object]
     aadt_provider: Callable[[], object]
     vru_provider: Callable[[], object]
+    work_zone_provider: Callable[[], object]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -1045,6 +1047,19 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "are straight-line."
                 ),
             },
+            "work_zones": {
+                "enabled": True,
+                "active_now": len(deps.work_zone_provider().all(when=work_zones.utc_now())),
+                "loaded_total": len(deps.work_zone_provider()),
+                "endpoints": ["/v1/work-zones/near"],
+                "source": "wzdx",
+                "note": (
+                    "Active work zones from a WZDx feed as a dynamic hazard, with a "
+                    "screening risk multiplier by vehicle_impact. Coverage is uneven; "
+                    "the shipped feed is a curated sample (build the real one with "
+                    "scripts/download_wzdx.py + TRAFFIC_SAFETY_WZDX_PATH)."
+                ),
+            },
             "vru": {
                 "enabled": deps.vru_provider().ready,
                 "model_version": deps.vru_provider().model_version,
@@ -1673,6 +1688,48 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 "nearby mapped segment, 'class_default' a functional-class median, "
                 "'unavailable' when neither is known."
             ),
+        }
+
+    @router.get(
+        "/work-zones/near",
+        summary="Active WZDx work zones near a point, with a screening risk multiplier",
+    )
+    def work_zones_near(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+        radius_km: float = Query(
+            work_zones.DEFAULT_RADIUS_KM, gt=0.0, le=25.0, description="search radius"
+        ),
+        when: str | None = Query(
+            None, description="ISO-8601 UTC time to check activity for (default: now)"
+        ),
+    ) -> dict:
+        response.headers["Cache-Control"] = "no-store"  # work zones are time-sensitive
+        if when:
+            moment = work_zones._parse_dt(when)
+            if moment is None:
+                raise HTTPException(status_code=422, detail="when must be an ISO-8601 datetime")
+        else:
+            moment = work_zones.utc_now()
+        store = deps.work_zone_provider()
+        impact = store.point_impact(lat, lon, when=moment, radius_km=radius_km)
+        return {
+            "lat": lat,
+            "lon": lon,
+            "radius_km": radius_km,
+            "as_of_utc": moment.isoformat(),
+            "in_work_zone": impact["in_work_zone"],
+            "work_zone_count": impact["count"],
+            "risk_multiplier": impact["risk_multiplier"],
+            "work_zones": store.near(lat, lon, radius_km, when=moment),
+            "source": "wzdx",
+            "caveats": [
+                "WZDx coverage is uneven and agency-published; 'none' means none in "
+                "the loaded feed, not none on the ground.",
+                "risk_multiplier is a screening factor by vehicle_impact, not a "
+                "calibrated crash-modification factor.",
+            ],
         }
 
     @router.get(
