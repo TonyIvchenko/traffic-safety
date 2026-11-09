@@ -111,6 +111,7 @@ controlled only by a per-client-IP rate limiter.
 | VRU risk | `/v1/vru/*` | Pedestrian/cyclist crash-risk layer (point + weekly), from FARS VRU-only history |
 | Traffic exposure | `/v1/exposure/*` | AADT (FHWA HPMS) for crashes-per-VMT normalization |
 | Work zones | `/v1/work-zones/*` | Active WZDx construction zones near a point + screening risk multiplier |
+| Traffic speed | `/v1/speed/*` | NPMRDS congestion + U-shaped speed-risk index (congestion and speeding) |
 | [Safety grants](#federal-safety-grant-analysis-ss4a--hsip) | `/v1/grants/*` | SS4A/HSIP analysis: HIN, systemic risk, benefit-cost per jurisdiction |
 | [Equity](#equity--justice40-overlay) | `/v1/equity/*` | SVI + Justice40 overlay, hotspots, disparity, choropleth |
 | [Countermeasures](#countermeasure-recommendations-fhwa-cmfs) | `/v1/countermeasures/*` | FHWA CMF treatments + benefit-cost for HIN segments |

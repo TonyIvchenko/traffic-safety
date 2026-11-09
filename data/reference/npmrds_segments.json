@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "source": "Curated illustrative sample of NPMRDS-style speed segments. For production, aggregate an NPMRDS (FHWA/RITIS) travel-time export into reference + peak/offpeak average speeds and build data/processed/npmrds_segments.parquet via scripts/build_npmrds_index.py.",
+  "note": "Speed-risk features. 'reference_speed_mph' is free-flow (~85th pct), 'peak_speed_mph' / 'offpeak_speed_mph' are typical averages for AM/PM peak vs off-peak. Low observed/reference = congestion; well above reference = speeding. Values are illustrative, not measured.",
+  "segments": [
+    {"id": "la-i10-dtla", "name": "I-10 Santa Monica Fwy (DTLA)", "lat": 34.0335, "lon": -118.2487, "reference_speed_mph": 65, "peak_speed_mph": 22, "offpeak_speed_mph": 60, "road_class": "interstate", "year": 2023},
+    {"id": "la-i405-westla", "name": "I-405 (West LA)", "lat": 34.0430, "lon": -118.4430, "reference_speed_mph": 65, "peak_speed_mph": 18, "offpeak_speed_mph": 58, "road_class": "interstate", "year": 2023},
+    {"id": "la-wilshire", "name": "Wilshire Blvd", "lat": 34.0618, "lon": -118.3090, "reference_speed_mph": 35, "peak_speed_mph": 14, "offpeak_speed_mph": 28, "road_class": "arterial", "year": 2023},
+    {"id": "sf-us101", "name": "US-101 Central Fwy", "lat": 37.7701, "lon": -122.4106, "reference_speed_mph": 65, "peak_speed_mph": 24, "offpeak_speed_mph": 58, "road_class": "freeway", "year": 2023},
+    {"id": "sf-i80-bay", "name": "I-80 Bay Bridge approach", "lat": 37.7897, "lon": -122.3889, "reference_speed_mph": 60, "peak_speed_mph": 16, "offpeak_speed_mph": 52, "road_class": "interstate", "year": 2023},
+    {"id": "ny-fdr", "name": "FDR Drive", "lat": 40.7610, "lon": -73.9580, "reference_speed_mph": 50, "peak_speed_mph": 15, "offpeak_speed_mph": 42, "road_class": "freeway", "year": 2022},
+    {"id": "ny-i495", "name": "I-495 Long Island Expwy", "lat": 40.7420, "lon": -73.8900, "reference_speed_mph": 60, "peak_speed_mph": 20, "offpeak_speed_mph": 54, "road_class": "interstate", "year": 2022},
+    {"id": "chi-i90-94", "name": "I-90/94 Dan Ryan Expwy", "lat": 41.8450, "lon": -87.6360, "reference_speed_mph": 60, "peak_speed_mph": 19, "offpeak_speed_mph": 55, "road_class": "interstate", "year": 2023},
+    {"id": "hou-i610", "name": "I-610 West Loop", "lat": 29.7460, "lon": -95.4610, "reference_speed_mph": 65, "peak_speed_mph": 28, "offpeak_speed_mph": 62, "road_class": "interstate", "year": 2023},
+    {"id": "phx-i10", "name": "I-10 Papago Fwy", "lat": 33.4580, "lon": -112.0870, "reference_speed_mph": 65, "peak_speed_mph": 34, "offpeak_speed_mph": 63, "road_class": "interstate", "year": 2023},
+    {"id": "sea-i5", "name": "I-5 (Downtown Seattle)", "lat": 47.6000, "lon": -122.3270, "reference_speed_mph": 60, "peak_speed_mph": 17, "offpeak_speed_mph": 50, "road_class": "interstate", "year": 2022},
+    {"id": "den-i25", "name": "I-25 (Central Denver)", "lat": 39.7220, "lon": -104.9870, "reference_speed_mph": 65, "peak_speed_mph": 30, "offpeak_speed_mph": 61, "road_class": "interstate", "year": 2023},
+    {"id": "atl-i75-85", "name": "I-75/85 Downtown Connector", "lat": 33.7620, "lon": -84.3890, "reference_speed_mph": 60, "peak_speed_mph": 18, "offpeak_speed_mph": 54, "road_class": "interstate", "year": 2023},
+    {"id": "mia-i95", "name": "I-95 (Downtown Miami)", "lat": 25.7850, "lon": -80.2050, "reference_speed_mph": 65, "peak_speed_mph": 26, "offpeak_speed_mph": 60, "road_class": "interstate", "year": 2023}
+  ]
+}

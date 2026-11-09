@@ -30,6 +30,7 @@ import facilities
 import grant_html
 import notify
 import source_catalog
+import traffic_speed
 import work_zones
 import validation
 from live_weather import LiveWeatherProviderError
@@ -237,6 +238,7 @@ class V1Dependencies:
     aadt_provider: Callable[[], object]
     vru_provider: Callable[[], object]
     work_zone_provider: Callable[[], object]
+    traffic_speed_provider: Callable[[], object]
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -1047,6 +1049,18 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "are straight-line."
                 ),
             },
+            "traffic_speed": {
+                "enabled": True,
+                "speed_segments": len(deps.traffic_speed_provider()),
+                "endpoints": ["/v1/speed/point"],
+                "periods": ["peak", "offpeak"],
+                "source": "npmrds",
+                "note": (
+                    "Congestion + speed-risk (U-shaped: heavy congestion and speeding "
+                    "both elevate) from NPMRDS-style speeds. The shipped index is a "
+                    "curated sample; build the real one with scripts/build_npmrds_index.py."
+                ),
+            },
             "work_zones": {
                 "enabled": True,
                 "active_now": len(deps.work_zone_provider().all(when=work_zones.utc_now())),
@@ -1687,6 +1701,40 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                 "read per million VMT (AADT x length x days). basis 'hpms_segment' is a "
                 "nearby mapped segment, 'class_default' a functional-class median, "
                 "'unavailable' when neither is known."
+            ),
+        }
+
+    @router.get(
+        "/speed/point",
+        summary="Traffic-speed context (NPMRDS) at a point — congestion + speed-risk index",
+    )
+    def speed_point(
+        response: Response,
+        lat: float = Query(..., ge=-90.0, le=90.0),
+        lon: float = Query(..., ge=-180.0, le=180.0),
+        period: str = Query("peak", description="'peak' or 'offpeak'"),
+        hour: int | None = Query(
+            None, ge=0, le=23, description="local hour; overrides period (peak 7-9/16-18)"
+        ),
+        match_radius_km: float = Query(
+            traffic_speed.DEFAULT_MATCH_RADIUS_KM, gt=0.0, le=25.0, description="segment search radius"
+        ),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        resolved_period = traffic_speed.period_for_hour(hour) if hour is not None else period
+        result = deps.traffic_speed_provider().lookup(
+            lat, lon, period=resolved_period, max_km=match_radius_km
+        )
+        return {
+            "lat": lat,
+            "lon": lon,
+            **result,
+            "source": "npmrds",
+            "note": (
+                "Congestion ratio = observed / free-flow speed; speed_risk_index is a "
+                "U-shaped screening multiplier (elevated for heavy congestion and for "
+                "travel well above free-flow), not a calibrated crash-modification "
+                "factor. basis 'unavailable' when no nearby segment is mapped."
             ),
         }
 

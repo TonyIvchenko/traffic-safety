@@ -86,6 +86,7 @@ from equity import equity_for_tract as _equity_for_tract
 from equity import load_equity_overlay as _get_equity_overlay
 from exposure import load_aadt_store as _get_aadt_store
 from facilities import load_facility_store as _get_facility_store
+from traffic_speed import load_traffic_speed_store as _get_traffic_speed_store
 from vru_runtime import load_vru_layer as _get_vru_layer
 from work_zones import load_work_zone_store as _get_work_zone_store
 from geo_lookup import tract_of as _tract_of
@@ -1289,6 +1290,7 @@ api.include_router(
             aadt_provider=_get_aadt_store,
             vru_provider=_get_vru_layer,
             work_zone_provider=_get_work_zone_store,
+            traffic_speed_provider=_get_traffic_speed_store,
         )
     )
 )
