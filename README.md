@@ -138,6 +138,12 @@ The geospatial endpoints (`/v1/risk/route`, `/v1/risk/area`) accept
 that drops straight into Leaflet/Mapbox/QGIS. Risk responses use SI units
 (`celsius`, `m/s`, `km`) and a `risk_score` probability in `[0, 1]`.
 
+`GET /v1/risk/point?context=true` adds a transparent **screening overlay** that
+multiplies the base model score by current dynamic hazards — active WZDx work
+zones and NPMRDS congestion/speeding at that location — returning each factor and
+an `adjusted_risk_score`. The base model score is never mutated; the overlay is a
+screening aid, not a recalibrated model, and hazard-layer coverage is uneven.
+
 Examples:
 
 ```bash

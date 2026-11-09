@@ -99,6 +99,7 @@ class PointRisk(BaseModel):
     target_timestamp_local: str | None = None
     forecast_hours: int | None = None
     explanation: Explanation | None = None
+    context: dict | None = None
 
 
 class HealthResponse(BaseModel):
@@ -1144,6 +1145,86 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         response.headers["Cache-Control"] = "public, max-age=300"
         return deps.model_report_loader()
 
+    def _level_for_score(score: float) -> str:
+        """Map an adjusted score to a level using the model's own risk quantiles."""
+        quantiles = deps.risk_quantiles
+        if (
+            isinstance(quantiles, (list, tuple))
+            and len(quantiles) >= 3
+            and all(isinstance(value, (int, float)) for value in quantiles[:3])
+        ):
+            low, mid, high = (float(value) for value in quantiles[:3])
+        else:
+            low, mid, high = 0.10, 0.25, 0.45
+        if score < low:
+            return "low"
+        if score < mid:
+            return "moderate"
+        if score < high:
+            return "high"
+        return "extreme"
+
+    def _hazard_context(result: dict) -> dict:
+        """Screening adjustment of a point's base risk by current dynamic hazards.
+
+        Multiplies the base model score by the current work-zone and typical
+        traffic-speed hazard factors (each shown as a transparent factor), clamped
+        to [0, 1]. The base model score is never mutated; this is an overlay.
+        """
+        lat, lon = float(result["lat"]), float(result["lon"])
+        base_score = float(result.get("risk_score", 0.0))
+        hour = int(result.get("local_hour", 0))
+        when = work_zones.utc_now()
+
+        factors: list[dict] = []
+        combined = 1.0
+
+        wz = deps.work_zone_provider().point_impact(lat, lon, when=when)
+        if wz["in_work_zone"] and wz["risk_multiplier"] != 1.0:
+            combined *= wz["risk_multiplier"]
+            factors.append(
+                {
+                    "source": "work_zone",
+                    "multiplier": wz["risk_multiplier"],
+                    "detail": {"count": wz["count"], "nearest": wz["nearest"]},
+                }
+            )
+
+        speed = deps.traffic_speed_provider().lookup(
+            lat, lon, period=traffic_speed.period_for_hour(hour)
+        )
+        if speed["basis"] == "npmrds_segment" and speed["speed_risk_index"] != 1.0:
+            combined *= speed["speed_risk_index"]
+            factors.append(
+                {
+                    "source": "traffic_speed",
+                    "multiplier": speed["speed_risk_index"],
+                    "detail": {
+                        "period": speed["period"],
+                        "congestion_ratio": speed["congestion_ratio"],
+                        "observed_speed_mph": speed["observed_speed_mph"],
+                        "reference_speed_mph": speed["reference_speed_mph"],
+                    },
+                }
+            )
+
+        adjusted = max(0.0, min(1.0, base_score * combined))
+        return {
+            "applied": bool(factors),
+            "evaluated_at_utc": when.isoformat(),
+            "base_risk_score": round(base_score, 6),
+            "factors": factors,
+            "combined_multiplier": round(combined, 4),
+            "adjusted_risk_score": round(adjusted, 6),
+            "adjusted_risk_level": _level_for_score(adjusted),
+            "note": (
+                "Screening overlay: the base model score multiplied by current "
+                "work-zone and typical traffic-speed hazards. The factors are "
+                "screening multipliers, not a recalibrated model, and hazard-layer "
+                "coverage is uneven."
+            ),
+        }
+
     @router.get(
         "/risk/point",
         response_model=PointRisk,
@@ -1160,6 +1241,10 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         forecast_hours: int = Query(0, ge=0, le=48, description="hours ahead (live)"),
         provider: str = Query("auto", description="live weather provider (live)"),
         explain: bool = Query(False, description="include a factor breakdown of the score"),
+        context: bool = Query(
+            False,
+            description="apply current work-zone & traffic-speed hazards as a screening adjustment",
+        ),
     ) -> dict:
         mode_norm = mode.strip().lower()
         if mode_norm not in {"climatology", "live"}:
@@ -1194,6 +1279,8 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
 
         if explain:
             result = {**result, "explanation": deps.explain_point(result)}
+        if context:
+            result = {**result, "context": _hazard_context(result)}
         return result
 
     @router.get(
