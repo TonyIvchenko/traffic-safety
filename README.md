@@ -116,6 +116,7 @@ controlled only by a per-client-IP rate limiter.
 | [Equity](#equity--justice40-overlay) | `/v1/equity/*` | SVI + Justice40 overlay, hotspots, disparity, choropleth |
 | [Countermeasures](#countermeasure-recommendations-fhwa-cmfs) | `/v1/countermeasures/*` | FHWA CMF treatments + benefit-cost for HIN segments |
 | [Outcome evaluation](#countermeasure-outcome-evaluation-empirical-bayes) | `/v1/evaluation/*` | Empirical-Bayes before/after CMF (regression-to-the-mean corrected) |
+| [Program builder](#safety-program-builder-equity-weighted-benefit-cost) | `/v1/program/*` | Bundle candidate projects into a budget-constrained SS4A/HSIP program |
 | [Road Risk Advisory](#road-risk-advisory-aqi-for-driving) | `/v1/advisory/*` | Relative "AQI for driving" — point, region, national |
 | [Proactive alerts](#proactive-alerts-watches) | `/v1/watches/*` | Subscribe to alerts when risk is unusual for a place/time (point/route/area/region) |
 | [Emergency](#emergency-response--evacuation) | `/v1/emergency/*` | Nearest facilities, evacuation routing, regional readiness |
@@ -404,6 +405,49 @@ The `predicted_*` values must come from an SPF calibrated to the jurisdiction (t
 carry traffic-volume and period-length changes between periods); the EB result is
 only as sound as those predictions. This is decision-support screening, not an
 official evaluation.
+
+## Safety Program Builder (equity-weighted benefit-cost)
+
+Given a pool of candidate projects, which ones should a budget actually fund? This
+turns candidates into a **program** — the ranked, budget-constrained bundle an
+agency submits for an **SS4A** (Safe Streets and Roads for All) or **HSIP**
+(Highway Safety Improvement Program) application. It builds on the rest of the
+stack: candidates can come straight from `/v1/countermeasures/*` (which supply the
+treatment, its CMF, and the crashes reduced), be priced at the FHWA comprehensive
+crash costs used in `/v1/grants`, and carry the SVI / Justice40 flags from
+`/v1/equity`.
+
+Each candidate is valued the HSIP way — the crashes it avoids, priced and
+discounted over the treatment's service life — then screened for cost-effectiveness
+(`min_benefit_cost_ratio`, default BCR ≥ 1). The eligible projects are ranked by
+**equity-weighted benefit per dollar** (`present_value_benefit × (1 + svi_weight·SVI
++ disadvantaged_boost)` ÷ cost) and funded down the list until the budget runs out.
+Set both weights to `0` to rank purely by benefit-cost; raise them to steer funding
+toward socially vulnerable and disadvantaged communities.
+
+`POST /v1/program/build` returns the funded set, the deferred set (with a reason —
+over budget, capped, or below the BCR screen), program rollups (programmed cost,
+present-value benefit, program BCR, crashes reduced, and how much of the money
+reaches disadvantaged communities), and an SS4A/HSIP-shaped `export` ready to drop
+into an application.
+
+```bash
+curl -X POST "http://127.0.0.1:8080/v1/program/build" \
+  -H 'Content-Type: application/json' \
+  -d '{"budget": 1500000, "svi_weight": 1.0, "disadvantaged_boost": 0.5, "candidates": [
+        {"project_id":"A","segment_id":"S-1","countermeasure":"Road diet",
+         "treatment_cost":500000,"annual_crashes_reduced":0.1,
+         "svi_percentile":0.9,"disadvantaged":true},
+        {"project_id":"B","treatment_cost":300000,
+         "expected_annual_crashes":0.2,"cmf":0.5,"svi_percentile":0.3}]}'
+# -> ranked, budget-constrained program + per-project SS4A/HSIP export rows
+```
+
+Selection is a transparent greedy knapsack (best value-per-dollar first, skipping a
+project that does not fit so cheaper ones can still be funded) — a defensible
+screening heuristic, not a guaranteed-optimal portfolio. The equity weighting is a
+policy choice, and every project should still get a project-specific CMF, cost
+estimate, and benefit-cost analysis before funds are programmed.
 
 ## Road Risk Advisory ("AQI for driving")
 

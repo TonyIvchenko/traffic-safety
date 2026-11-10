@@ -23,6 +23,7 @@ import requests
 
 import advisory
 import advisory_messages
+import crash_costs
 import datasets as datasets_catalog
 import evacuation
 import empirical_bayes
@@ -30,6 +31,7 @@ import exposure
 import facilities
 import grant_html
 import notify
+import program_builder
 import source_catalog
 import traffic_speed
 import work_zones
@@ -220,6 +222,39 @@ class BeforeAfterRequest(BaseModel):
     overdispersion: float | None = Field(
         None, gt=0, description="default SPF overdispersion k for sites without their own"
     )
+
+
+class CandidateProject(BaseModel):
+    project_id: str | None = None
+    name: str | None = None
+    segment_id: str | None = Field(None, description="HIN segment id, if the project is a segment")
+    lat: float | None = Field(None, ge=-90.0, le=90.0)
+    lon: float | None = Field(None, ge=-180.0, le=180.0)
+    countermeasure_id: str | None = None
+    countermeasure: str | None = Field(None, description="treatment name, for the export")
+    treatment_cost: float = Field(..., gt=0, description="install/construction cost (USD)")
+    annual_crashes_reduced: float | None = Field(
+        None, ge=0, description="average annual crashes the treatment avoids"
+    )
+    expected_annual_crashes: float | None = Field(
+        None, ge=0, description="baseline annual crashes (used with cmf if reduction not given)"
+    )
+    cmf: float | None = Field(None, gt=0, description="crash modification factor of the treatment")
+    crash_cost: float | None = Field(None, gt=0, description="per-crash cost override (USD)")
+    svi_percentile: float | None = Field(None, ge=0, le=1, description="CDC/ATSDR SVI percentile 0-1")
+    disadvantaged: bool = Field(False, description="Justice40 disadvantaged community")
+
+
+class ProgramBuildRequest(BaseModel):
+    candidates: list[CandidateProject] = Field(..., min_length=1, max_length=5000)
+    budget: float | None = Field(None, gt=0, description="total funds available (USD); omit for no cap")
+    svi_weight: float = Field(1.0, ge=0, le=10, description="how strongly SVI boosts priority")
+    disadvantaged_boost: float = Field(0.5, ge=0, le=10, description="extra priority for a Justice40 tract")
+    min_benefit_cost_ratio: float = Field(1.0, ge=0, description="cost-effectiveness screen (BCR floor)")
+    service_life_years: int | None = Field(None, ge=1, le=100)
+    discount_rate: float | None = Field(None, ge=0, le=1)
+    crash_cost: float | None = Field(None, gt=0, description="default per-crash cost (USD)")
+    max_projects: int | None = Field(None, ge=1, le=5000, description="optional cap on funded projects")
 
 
 MAX_VALIDATION_RECORDS = 50000
@@ -1077,6 +1112,20 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "to get a regression-to-the-mean-corrected CMF with a 95% CI."
                 ),
             },
+            "program": {
+                "enabled": True,
+                "method": "equity_weighted_benefit_cost_program",
+                "selection_metric": program_builder.SELECTION_METRIC,
+                "endpoints": ["/v1/program/build"],
+                "cost_basis": crash_costs.COST_SOURCE,
+                "note": (
+                    "Equity-weighted benefit-cost program builder: bundle candidate "
+                    "projects into a budget-constrained SS4A/HSIP program, ranked by "
+                    "benefit per dollar weighted up for SVI / Justice40 communities. "
+                    "Returns the funded set, deferred set, program rollups, and an "
+                    "SS4A/HSIP-shaped export."
+                ),
+            },
             "traffic_speed": {
                 "enabled": True,
                 "speed_segments": len(deps.traffic_speed_provider()),
@@ -1212,6 +1261,65 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "period-length changes between the before and after periods.",
             "A CMF < 1 means fewer crashes (a reduction); significant_95 is whether "
             "the 95% CI excludes 1.0.",
+        ]
+        return result
+
+    @router.post(
+        "/program/build",
+        response_model=None,
+        summary="Equity-weighted benefit-cost program builder (SS4A/HSIP bundle)",
+    )
+    def program_build(response: Response, body: ProgramBuildRequest) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        candidates = [
+            {
+                "project_id": c.project_id,
+                "name": c.name,
+                "segment_id": c.segment_id,
+                "lat": c.lat,
+                "lon": c.lon,
+                "countermeasure_id": c.countermeasure_id,
+                "countermeasure": c.countermeasure,
+                "treatment_cost": c.treatment_cost,
+                "annual_crashes_reduced": c.annual_crashes_reduced,
+                "expected_annual_crashes": c.expected_annual_crashes,
+                "cmf": c.cmf,
+                "crash_cost": c.crash_cost,
+                "svi_percentile": c.svi_percentile,
+                "disadvantaged": c.disadvantaged,
+            }
+            for c in body.candidates
+        ]
+        result = program_builder.build_program(
+            candidates,
+            budget=body.budget,
+            svi_weight=body.svi_weight,
+            disadvantaged_boost=body.disadvantaged_boost,
+            min_benefit_cost_ratio=body.min_benefit_cost_ratio,
+            service_life_years=body.service_life_years,
+            discount_rate=body.discount_rate,
+            crash_cost=body.crash_cost,
+            max_projects=body.max_projects,
+        )
+        if result["scored_count"] == 0:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "no candidate could be scored: each needs a positive treatment_cost "
+                    "and a benefit (annual_crashes_reduced, or expected_annual_crashes + cmf)"
+                ),
+            )
+        result["export"] = program_builder.hsip_export(result)
+        result["caveats"] = [
+            "A screening prioritization, not an engineering study: benefits use "
+            "representative FHWA crash costs and the benefit inputs you supply "
+            "(crashes reduced, or expected crashes x CMF).",
+            "Selection is a greedy knapsack by equity-weighted benefit per dollar; "
+            "it is a transparent heuristic, not a guaranteed-optimal portfolio.",
+            "The equity weighting (svi_weight, disadvantaged_boost) is a policy "
+            "choice; set both to 0 to rank purely by benefit-cost.",
+            "Confirm each project with a project-specific CMF, cost estimate, and "
+            "benefit-cost analysis before programming funds.",
         ]
         return result
 
