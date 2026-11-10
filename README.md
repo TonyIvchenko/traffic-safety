@@ -115,6 +115,7 @@ controlled only by a per-client-IP rate limiter.
 | [Safety grants](#federal-safety-grant-analysis-ss4a--hsip) | `/v1/grants/*` | SS4A/HSIP analysis: HIN, systemic risk, benefit-cost per jurisdiction |
 | [Equity](#equity--justice40-overlay) | `/v1/equity/*` | SVI + Justice40 overlay, hotspots, disparity, choropleth |
 | [Countermeasures](#countermeasure-recommendations-fhwa-cmfs) | `/v1/countermeasures/*` | FHWA CMF treatments + benefit-cost for HIN segments |
+| [Outcome evaluation](#countermeasure-outcome-evaluation-empirical-bayes) | `/v1/evaluation/*` | Empirical-Bayes before/after CMF (regression-to-the-mean corrected) |
 | [Road Risk Advisory](#road-risk-advisory-aqi-for-driving) | `/v1/advisory/*` | Relative "AQI for driving" — point, region, national |
 | [Proactive alerts](#proactive-alerts-watches) | `/v1/watches/*` | Subscribe to alerts when risk is unusual for a place/time (point/route/area/region) |
 | [Emergency](#emergency-response--evacuation) | `/v1/emergency/*` | Nearest facilities, evacuation routing, regional readiness |
@@ -374,6 +375,35 @@ fallback).
   rating). Roadway context is inferred from MTFCC (urban assumed when unknown).
 - These are **representative screening values**, not project-specific CMFs, and
   **not a substitute for an engineering study** before programming funds.
+
+## Countermeasure Outcome Evaluation (Empirical Bayes)
+
+Did a treatment actually work? A naive before/after crash comparison is biased by
+**regression to the mean** — sites get treated after a bad spell and would have
+improved anyway. The Empirical-Bayes (EB) method (AASHTO Highway Safety Manual,
+Hauer) corrects for this by blending each site's observed before-period crashes
+with a Safety Performance Function (SPF) prediction, then projecting the
+EB-expected crashes into the after period to compare against what was observed.
+
+`POST /v1/evaluation/before-after` takes treated sites — each with observed and
+SPF-predicted crashes for the before and after periods plus the SPF
+overdispersion `k` — and returns the safety-effectiveness index / crash
+modification factor (`cmf`), its standard error and 95% CI, the percent change in
+crashes, and whether the effect is significant at 95%.
+
+```bash
+curl -X POST "http://127.0.0.1:8080/v1/evaluation/before-after" \
+  -H 'Content-Type: application/json' \
+  -d '{"overdispersion": 0.5, "sites": [
+        {"site_id":"A","observed_before":12,"observed_after":6,
+         "predicted_before":10,"predicted_after":10}]}'
+# -> cmf ~0.48 (a ~52% reduction), 95% CI excludes 1.0 (significant)
+```
+
+The `predicted_*` values must come from an SPF calibrated to the jurisdiction (they
+carry traffic-volume and period-length changes between periods); the EB result is
+only as sound as those predictions. This is decision-support screening, not an
+official evaluation.
 
 ## Road Risk Advisory ("AQI for driving")
 

@@ -25,6 +25,7 @@ import advisory
 import advisory_messages
 import datasets as datasets_catalog
 import evacuation
+import empirical_bayes
 import exposure
 import facilities
 import grant_html
@@ -203,6 +204,22 @@ class WatchUpdateRequest(BaseModel):
 class ValidationRequest(BaseModel):
     dataset: str
     records: list[dict] = Field(default_factory=list)
+
+
+class EBSite(BaseModel):
+    site_id: str | None = None
+    observed_before: float = Field(..., ge=0, description="recorded crashes in the before period")
+    observed_after: float = Field(..., ge=0, description="recorded crashes in the after period")
+    predicted_before: float = Field(..., gt=0, description="SPF-predicted crashes, before period")
+    predicted_after: float = Field(..., ge=0, description="SPF-predicted crashes, after period")
+    overdispersion: float | None = Field(None, gt=0, description="SPF overdispersion k (per-site)")
+
+
+class BeforeAfterRequest(BaseModel):
+    sites: list[EBSite] = Field(..., min_length=1, max_length=5000)
+    overdispersion: float | None = Field(
+        None, gt=0, description="default SPF overdispersion k for sites without their own"
+    )
 
 
 MAX_VALIDATION_RECORDS = 50000
@@ -1050,6 +1067,16 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "are straight-line."
                 ),
             },
+            "evaluation": {
+                "enabled": True,
+                "method": "empirical_bayes_before_after",
+                "endpoints": ["/v1/evaluation/before-after"],
+                "note": (
+                    "Empirical-Bayes before/after countermeasure evaluation: supply "
+                    "treated sites with observed and SPF-predicted crashes per period "
+                    "to get a regression-to-the-mean-corrected CMF with a 95% CI."
+                ),
+            },
             "traffic_speed": {
                 "enabled": True,
                 "speed_segments": len(deps.traffic_speed_provider()),
@@ -1144,6 +1171,49 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
     def model_report(response: Response) -> dict:
         response.headers["Cache-Control"] = "public, max-age=300"
         return deps.model_report_loader()
+
+    @router.post(
+        "/evaluation/before-after",
+        summary="Empirical-Bayes before/after safety evaluation (CMF with RTM correction)",
+    )
+    def evaluation_before_after(response: Response, body: BeforeAfterRequest) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        sites = []
+        for site in body.sites:
+            overdispersion = site.overdispersion if site.overdispersion is not None else body.overdispersion
+            if overdispersion is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="overdispersion (SPF k) is required per-site or as a request default",
+                )
+            sites.append(
+                {
+                    "site_id": site.site_id,
+                    "observed_before": site.observed_before,
+                    "observed_after": site.observed_after,
+                    "predicted_before": site.predicted_before,
+                    "predicted_after": site.predicted_after,
+                    "overdispersion": overdispersion,
+                }
+            )
+
+        result = empirical_bayes.before_after(sites)
+        if result["status"] != "ok":
+            raise HTTPException(
+                status_code=422,
+                detail="no valid sites to evaluate (check observed/predicted values)",
+            )
+        result["method"] = "empirical_bayes_before_after"
+        result["caveats"] = [
+            "Empirical-Bayes corrects for regression to the mean; results are only "
+            "as good as the SPF predictions supplied.",
+            "predicted_before/after must come from a Safety Performance Function "
+            "calibrated to the jurisdiction; they carry traffic-volume and "
+            "period-length changes between the before and after periods.",
+            "A CMF < 1 means fewer crashes (a reduction); significant_95 is whether "
+            "the 95% CI excludes 1.0.",
+        ]
+        return result
 
     def _level_for_score(score: float) -> str:
         """Map an adjusted score to a level using the model's own risk quantiles."""
