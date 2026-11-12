@@ -117,6 +117,7 @@ controlled only by a per-client-IP rate limiter.
 | [Countermeasures](#countermeasure-recommendations-fhwa-cmfs) | `/v1/countermeasures/*` | FHWA CMF treatments + benefit-cost for HIN segments |
 | [Outcome evaluation](#countermeasure-outcome-evaluation-empirical-bayes) | `/v1/evaluation/*` | Empirical-Bayes before/after CMF (regression-to-the-mean corrected) |
 | [Program builder](#safety-program-builder-equity-weighted-benefit-cost) | `/v1/program/*` | Bundle candidate projects into a budget-constrained SS4A/HSIP program |
+| [Trend analytics](#crash-trend--emerging-hotspot-analytics) | `/v1/trends/*` | Mann-Kendall trend + emerging-hotspot classification: where crashes are rising |
 | [Road Risk Advisory](#road-risk-advisory-aqi-for-driving) | `/v1/advisory/*` | Relative "AQI for driving" — point, region, national |
 | [Proactive alerts](#proactive-alerts-watches) | `/v1/watches/*` | Subscribe to alerts when risk is unusual for a place/time (point/route/area/region) |
 | [Emergency](#emergency-response--evacuation) | `/v1/emergency/*` | Nearest facilities, evacuation routing, regional readiness |
@@ -448,6 +449,43 @@ project that does not fit so cheaper ones can still be funded) — a defensible
 screening heuristic, not a guaranteed-optimal portfolio. The equity weighting is a
 policy choice, and every project should still get a project-specific CMF, cost
 estimate, and benefit-cost analysis before funds are programmed.
+
+## Crash-Trend & Emerging-Hotspot Analytics
+
+Where crashes *are* is a map; where they are **rising** is a warning. Given a
+per-location yearly crash series, this reports a robust trend and classifies each
+location into an emerging-hotspot taxonomy (inspired by the Getis-Ord / ESRI
+framework), so a worsening corridor is separated from one that is merely always bad
+or bouncing around. It uses two non-parametric statistics suited to short, noisy,
+non-normal crash counts:
+
+- **Mann-Kendall** — a monotonic trend test (direction + two-sided p-value), robust
+  to outliers and tie-corrected.
+- **Theil-Sen** — the median of all pairwise slopes, a crashes-per-year trend a
+  single freak year cannot swing.
+
+`POST /v1/trends/series` summarizes one location (trend, slope, year-over-year and
+recent-vs-baseline change, and — given a `hot_threshold` — its category).
+`POST /v1/trends/hotspots` classifies and ranks many locations, surfacing **new**
+and **intensifying** hotspots first. There, "hot" is cross-sectional: for each year
+a location is hot if its count is at or above the `hot_quantile` of that year's
+counts (or an absolute `hot_threshold`). Categories: `new_hotspot`,
+`intensifying_hotspot`, `persistent_hotspot`, `diminishing_hotspot`, `past_hotspot`,
+`emerging`, `sporadic_hotspot`, `none`.
+
+```bash
+curl -X POST "http://127.0.0.1:8080/v1/trends/hotspots" \
+  -H 'Content-Type: application/json' \
+  -d '{"hot_quantile": 0.9, "rising_only": true, "locations": [
+        {"location_id":"Main St","series":[2,3,5,8,12]},
+        {"location_id":"Oak Ave","series":[14,13,14,15,13]},
+        {"location_id":"2nd St","series":[9,7,5,3,1]}]}'
+# -> Main St flagged new/intensifying; ranked ahead of the flat/falling corridors
+```
+
+The series is treated as evenly spaced in order; "hot" is relative to the locations
+you submit, not an absolute safety judgment; and short, low-count series are noisy,
+so an emerging flag is a screening signal to look closer, not a confirmed trend.
 
 ## Road Risk Advisory ("AQI for driving")
 

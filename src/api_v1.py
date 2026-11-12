@@ -34,6 +34,7 @@ import notify
 import program_builder
 import source_catalog
 import traffic_speed
+import trends
 import work_zones
 import validation
 from live_weather import LiveWeatherProviderError
@@ -255,6 +256,32 @@ class ProgramBuildRequest(BaseModel):
     discount_rate: float | None = Field(None, ge=0, le=1)
     crash_cost: float | None = Field(None, gt=0, description="default per-crash cost (USD)")
     max_projects: int | None = Field(None, ge=1, le=5000, description="optional cap on funded projects")
+
+
+class TrendSeriesRequest(BaseModel):
+    series: list[float] = Field(..., min_length=3, max_length=100, description="yearly crash counts, oldest first")
+    years: list[int] | None = Field(None, description="optional year labels aligned to series")
+    recent_years: int = Field(3, ge=1, le=50, description="size of the recent window")
+    hot_threshold: float | None = Field(None, ge=0, description="absolute level at/above which a year is 'hot'")
+    alpha: float = Field(0.05, gt=0, lt=1, description="significance level for the trend test")
+
+
+class TrendLocation(BaseModel):
+    location_id: str | None = None
+    name: str | None = None
+    lat: float | None = Field(None, ge=-90.0, le=90.0)
+    lon: float | None = Field(None, ge=-180.0, le=180.0)
+    series: list[float] = Field(..., min_length=1, max_length=100, description="yearly crash counts, oldest first")
+
+
+class TrendHotspotsRequest(BaseModel):
+    locations: list[TrendLocation] = Field(..., min_length=1, max_length=20000)
+    recent_years: int = Field(3, ge=1, le=50)
+    hot_quantile: float = Field(0.9, gt=0, lt=1, description="cross-sectional 'hot' cutoff per year")
+    hot_threshold: float | None = Field(None, ge=0, description="absolute 'hot' level (overrides hot_quantile)")
+    alpha: float = Field(0.05, gt=0, lt=1)
+    top_n: int = Field(50, ge=1, le=5000)
+    rising_only: bool = Field(False, description="keep only new/intensifying/emerging locations")
 
 
 MAX_VALIDATION_RECORDS = 50000
@@ -1126,6 +1153,18 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "SS4A/HSIP-shaped export."
                 ),
             },
+            "trends": {
+                "enabled": True,
+                "method": "mann_kendall_emerging_hotspot",
+                "endpoints": ["/v1/trends/series", "/v1/trends/hotspots"],
+                "categories": list(trends.CATEGORIES),
+                "note": (
+                    "Crash-trend and emerging-hotspot analytics: post a per-location "
+                    "yearly crash series to get a Mann-Kendall trend + Theil-Sen slope, "
+                    "and classify/rank locations (new, intensifying, persistent, "
+                    "diminishing, emerging) to find where crashes are rising."
+                ),
+            },
             "traffic_speed": {
                 "enabled": True,
                 "speed_segments": len(deps.traffic_speed_provider()),
@@ -1321,6 +1360,73 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "Confirm each project with a project-specific CMF, cost estimate, and "
             "benefit-cost analysis before programming funds.",
         ]
+        return result
+
+    _TREND_CAVEATS = [
+        "Mann-Kendall tests for a monotonic trend; Theil-Sen gives a robust "
+        "crashes-per-year slope. Both need a few years of data and treat the "
+        "series as evenly spaced in order.",
+        "'Hot' in the hotspots endpoint is relative to the other locations you "
+        "submit that year (or an absolute hot_threshold); it is not an absolute "
+        "safety judgment.",
+        "Short, low-count series are noisy; an emerging flag is a screening signal "
+        "to look closer, not a confirmed trend.",
+    ]
+
+    @router.post(
+        "/trends/series",
+        response_model=None,
+        summary="Crash-trend summary for one location (Mann-Kendall + Theil-Sen)",
+    )
+    def trends_series(response: Response, body: TrendSeriesRequest) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        if body.years is not None and len(body.years) != len(body.series):
+            raise HTTPException(
+                status_code=422, detail="years must align one-to-one with series"
+            )
+        result = trends.series_trend(
+            body.series,
+            years=body.years,
+            recent_years=body.recent_years,
+            alpha=body.alpha,
+            hot_threshold=body.hot_threshold,
+        )
+        if result.get("status") != "ok":
+            raise HTTPException(
+                status_code=422,
+                detail=f"need at least {trends.MIN_SERIES_LEN} finite data points to assess a trend",
+            )
+        result["method"] = "mann_kendall_theil_sen"
+        result["caveats"] = _TREND_CAVEATS
+        return result
+
+    @router.post(
+        "/trends/hotspots",
+        response_model=None,
+        summary="Rank locations by crash trend, surfacing emerging/rising hotspots",
+    )
+    def trends_hotspots(response: Response, body: TrendHotspotsRequest) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        locations = [
+            {
+                "location_id": loc.location_id,
+                "name": loc.name,
+                "lat": loc.lat,
+                "lon": loc.lon,
+                "series": loc.series,
+            }
+            for loc in body.locations
+        ]
+        result = trends.emerging_hotspots(
+            locations,
+            recent_years=body.recent_years,
+            hot_quantile=body.hot_quantile,
+            hot_threshold=body.hot_threshold,
+            alpha=body.alpha,
+            top_n=body.top_n,
+            rising_only=body.rising_only,
+        )
+        result["caveats"] = _TREND_CAVEATS
         return result
 
     def _level_for_score(score: float) -> str:
