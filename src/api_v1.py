@@ -30,6 +30,7 @@ import empirical_bayes
 import exposure
 import facilities
 import grant_html
+import impact
 import notify
 import program_builder
 import source_catalog
@@ -1165,6 +1166,18 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "diminishing, emerging) to find where crashes are rising."
                 ),
             },
+            "impact": {
+                "enabled": True,
+                "method": impact.METHOD,
+                "endpoints": ["/v1/impact/summary"],
+                "cost_basis": crash_costs.COST_SOURCE,
+                "note": (
+                    "Impact dashboard: a screening rollup of crashes averted, "
+                    "investment targeted, and the estimated equity split if the "
+                    "recommended countermeasures were applied across the High Injury "
+                    "Network. Synthesizes the countermeasure, grant, and equity layers."
+                ),
+            },
             "traffic_speed": {
                 "enabled": True,
                 "speed_segments": len(deps.traffic_speed_provider()),
@@ -1427,6 +1440,51 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             rising_only=body.rising_only,
         )
         result["caveats"] = _TREND_CAVEATS
+        return result
+
+    @router.get(
+        "/impact/summary",
+        response_model=None,
+        summary="Impact dashboard: crashes averted, investment targeted, equity gaps",
+    )
+    def impact_dashboard(
+        response: Response,
+        top_n: int = Query(500, ge=1, le=5000, description="HIN segments to roll up"),
+        min_fatal_crashes: float = Query(0.0, ge=0.0),
+        service_life_years: int | None = Query(None, ge=1, le=100),
+        discount_rate: float | None = Query(None, ge=0.0, le=1.0),
+    ) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        store = deps.countermeasure_provider()
+        hotspots = store.hotspots(top_n=top_n, min_fatal_crashes=min_fatal_crashes)
+        treatments = [h["recommended"] for h in hotspots if h.get("recommended")]
+
+        overlay = deps.equity_overlay_provider()
+        equity_disparity = overlay.summary() if len(overlay) else None
+
+        coverage = {
+            "hin_segments": len(store),
+            "segments_rolled_up": len(hotspots),
+            "equity_segments": len(overlay),
+            "grant_jurisdictions": deps.grant_provider().count(),
+        }
+
+        result = impact.impact_summary(
+            treatments,
+            equity_disparity=equity_disparity,
+            coverage=coverage,
+            service_life_years=service_life_years,
+            discount_rate=discount_rate,
+        )
+        result["caveats"] = [
+            "A screening rollup, not an accomplishment ledger: it estimates what "
+            "the recommended FHWA countermeasures would avert if applied, using "
+            "representative CMFs and FHWA comprehensive crash costs.",
+            "Crashes averted assume every treated segment's top recommendation is "
+            "built; real programs are budget-constrained (see /v1/program/build).",
+            "The equity split estimates the disadvantaged share of avertable crashes "
+            "from the network-wide disadvantaged crash share, not a per-project join.",
+        ]
         return result
 
     def _level_for_score(score: float) -> str:

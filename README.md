@@ -118,6 +118,7 @@ controlled only by a per-client-IP rate limiter.
 | [Outcome evaluation](#countermeasure-outcome-evaluation-empirical-bayes) | `/v1/evaluation/*` | Empirical-Bayes before/after CMF (regression-to-the-mean corrected) |
 | [Program builder](#safety-program-builder-equity-weighted-benefit-cost) | `/v1/program/*` | Bundle candidate projects into a budget-constrained SS4A/HSIP program |
 | [Trend analytics](#crash-trend--emerging-hotspot-analytics) | `/v1/trends/*` | Mann-Kendall trend + emerging-hotspot classification: where crashes are rising |
+| [Impact dashboard](#impact-dashboard) | `/v1/impact/*` | One rollup: crashes averted, investment targeted, equity gaps |
 | [Road Risk Advisory](#road-risk-advisory-aqi-for-driving) | `/v1/advisory/*` | Relative "AQI for driving" — point, region, national |
 | [Proactive alerts](#proactive-alerts-watches) | `/v1/watches/*` | Subscribe to alerts when risk is unusual for a place/time (point/route/area/region) |
 | [Emergency](#emergency-response--evacuation) | `/v1/emergency/*` | Nearest facilities, evacuation routing, regional readiness |
@@ -486,6 +487,39 @@ curl -X POST "http://127.0.0.1:8080/v1/trends/hotspots" \
 The series is treated as evenly spaced in order; "hot" is relative to the locations
 you submit, not an absolute safety judgment; and short, low-count series are noisy,
 so an emerging flag is a screening signal to look closer, not a confirmed trend.
+
+## Impact Dashboard
+
+One rollup that answers "what is this service worth?" by synthesizing the
+countermeasure, grant, and equity layers into the three numbers a public-good
+safety program lives or dies by:
+
+- **Crashes averted** — if the recommended FHWA countermeasures were applied across
+  the High Injury Network, the crashes prevented per year and over the treatments'
+  service life.
+- **Investment targeted** — the construction dollars those treatments represent,
+  the present value of the crashes they would avoid (FHWA comprehensive costs), and
+  the resulting benefit-cost ratio.
+- **Equity gaps** — how concentrated crashes are in disadvantaged communities
+  (disparity ratios) and an estimate of how much of the avertable harm falls there.
+
+`GET /v1/impact/summary` composes these from the same providers behind
+`/v1/countermeasures`, `/v1/grants`, and `/v1/equity`. `service_life_years` and
+`discount_rate` can be overridden; `top_n` / `min_fatal_crashes` scope the HIN
+segments rolled up.
+
+```bash
+curl "http://127.0.0.1:8080/v1/impact/summary?top_n=500"
+# -> headline + {prevention, equity, coverage}: crashes averted, $ targeted, BCR,
+#    and the estimated disadvantaged share of avertable crashes
+```
+
+This is a **screening rollup, not an accomplishment ledger**: it estimates what the
+recommended treatments *would* avert if built, using representative CMFs and crash
+costs; real programs are budget-constrained (see
+[the program builder](#safety-program-builder-equity-weighted-benefit-cost)), and
+the equity split is an estimate from the network-wide disadvantaged crash share, not
+a per-project join.
 
 ## Road Risk Advisory ("AQI for driving")
 
