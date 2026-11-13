@@ -114,6 +114,11 @@ ALERTS_ASSET_HREFS = {
     "js": f"/traffic-safety-static/alerts.js?v={STATIC_ASSET_VERSION}",
 }
 
+IMPACT_ASSET_HREFS = {
+    "css": f"/traffic-safety-static/impact.css?v={STATIC_ASSET_VERSION}",
+    "js": f"/traffic-safety-static/impact.js?v={STATIC_ASSET_VERSION}",
+}
+
 TILE_SIZE = 256
 SAMPLE_SIZE = 64
 
@@ -405,6 +410,7 @@ def _site_nav(active_page: str) -> str:
     links = [
         ("map", "/map", "Map"),
         ("alerts", "/alerts", "Advisory & Alerts"),
+        ("impact", "/impact", "Impact"),
         ("about", "/about", "About"),
         ("contact", "/contact", "Contact"),
     ]
@@ -687,6 +693,65 @@ def _alerts_page_html() -> str:
         content=_alerts_page_content(),
         extra_head=f'<link rel="stylesheet" href="{ALERTS_ASSET_HREFS["css"]}">',
         extra_script=f'<script src="{ALERTS_ASSET_HREFS["js"]}" defer></script>',
+    )
+
+
+def _impact_page_content() -> str:
+    config_blob = html.escape(json.dumps({"api_base": "/v1"}), quote=True)
+    return f"""
+    <div id="impact-shell" class="impact-shell" data-config="{config_blob}">
+      {_site_nav("impact")}
+      <header class="impact-hero">
+        <h2>What would it take to make the network safer &mdash; and who benefits?</h2>
+        <p>
+          If the recommended countermeasures were applied across the High Injury
+          Network, this is the harm they would prevent, what it would cost, and how
+          much of the benefit would reach disadvantaged communities. A screening
+          estimate from the same models behind the countermeasure, grant, and equity
+          tools &mdash; not a record of work already done.
+        </p>
+        <p id="impact-headline" class="impact-headline"></p>
+      </header>
+
+      <section class="impact-cards" aria-label="Impact summary">
+        <article class="impact-card impact-card-prevention">
+          <div class="impact-card-eyebrow">Crashes averted</div>
+          <div id="impact-crashes" class="impact-stat">&ndash;</div>
+          <div id="impact-crashes-sub" class="impact-card-sub"></div>
+        </article>
+        <article class="impact-card impact-card-investment">
+          <div class="impact-card-eyebrow">Investment targeted</div>
+          <div id="impact-investment" class="impact-stat">&ndash;</div>
+          <div id="impact-investment-sub" class="impact-card-sub"></div>
+        </article>
+        <article class="impact-card impact-card-equity">
+          <div class="impact-card-eyebrow">Equity</div>
+          <div id="impact-equity" class="impact-stat">&ndash;</div>
+          <div id="impact-equity-sub" class="impact-card-sub"></div>
+        </article>
+      </section>
+
+      <section class="impact-detail">
+        <dl id="impact-breakdown" class="impact-breakdown"></dl>
+        <footer id="impact-coverage" class="impact-coverage"></footer>
+      </section>
+
+      <details class="impact-caveats">
+        <summary>How this is estimated</summary>
+        <ul id="impact-caveat-list"></ul>
+      </details>
+
+      <div id="impact-status" class="impact-status" role="status"></div>
+    </div>
+    """
+
+
+def _impact_page_html() -> str:
+    return _document_html(
+        title="Road Risk Monitor | Impact",
+        content=_impact_page_content(),
+        extra_head=f'<link rel="stylesheet" href="{IMPACT_ASSET_HREFS["css"]}">',
+        extra_script=f'<script src="{IMPACT_ASSET_HREFS["js"]}" defer></script>',
     )
 
 
@@ -1445,6 +1510,11 @@ def map_page() -> HTMLResponse:
 @api.get("/alerts", response_class=HTMLResponse)
 def alerts_page() -> HTMLResponse:
     return HTMLResponse(_alerts_page_html())
+
+
+@api.get("/impact", response_class=HTMLResponse)
+def impact_page() -> HTMLResponse:
+    return HTMLResponse(_impact_page_html())
 
 
 @api.get("/about", response_class=HTMLResponse)

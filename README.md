@@ -514,6 +514,9 @@ curl "http://127.0.0.1:8080/v1/impact/summary?top_n=500"
 #    and the estimated disadvantaged share of avertable crashes
 ```
 
+A public, dependency-free dashboard at **`/impact`** renders this summary as three
+headline cards (crashes averted, investment targeted, equity) over the live API.
+
 This is a **screening rollup, not an accomplishment ledger**: it estimates what the
 recommended treatments *would* avert if built, using representative CMFs and crash
 costs; real programs are budget-constrained (see
