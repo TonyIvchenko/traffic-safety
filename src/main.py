@@ -78,6 +78,7 @@ from predict import (
 )
 import region_index
 import regions
+import api_keys
 from api_ratelimit import install_rate_limit_middleware, rate_limiter_from_env
 from api_v1 import V1Dependencies, build_v1_router
 from countermeasures import catalog_metadata as _countermeasure_catalog_metadata
@@ -1268,7 +1269,44 @@ api.add_middleware(
 )
 
 _RATE_LIMITER = rate_limiter_from_env()
-install_rate_limit_middleware(api, _RATE_LIMITER, path_prefix="/v1")
+
+# API keys / tiering (Horizon 4) are strictly opt-in. When disabled (the
+# default) the public API keeps the anonymous-only IP rate limiter and behaves
+# exactly as before. When enabled, a keyed middleware subsumes rate limiting:
+# anonymous traffic is still IP-keyed at the anonymous tier, keyed traffic gets
+# its tier's rate + daily quota, and usage is metered per instance in memory.
+_API_KEY_CONFIG = api_keys.api_key_config_from_env()
+if _API_KEY_CONFIG is not None:
+    _API_KEY_STORE = api_keys.ApiKeyStore(_API_KEY_CONFIG["db_path"])
+    _API_KEY_METER = api_keys.UsageMeter()
+    _API_KEY_ADMIN_TOKEN = _API_KEY_CONFIG["admin_token"]
+    _API_KEY_REQUIRE = bool(_API_KEY_CONFIG["require_key"])
+    _API_KEY_TIERS = api_keys.tier_table(
+        anonymous_rate_per_min=(_RATE_LIMITER.rate_per_min if _RATE_LIMITER else None)
+    )
+    api_keys.install_api_key_middleware(
+        api,
+        store=_API_KEY_STORE,
+        meter=_API_KEY_METER,
+        table=_API_KEY_TIERS,
+        require_key=_API_KEY_REQUIRE,
+        path_prefix="/v1",
+    )
+else:
+    _API_KEY_STORE = None
+    _API_KEY_METER = None
+    _API_KEY_ADMIN_TOKEN = None
+    _API_KEY_REQUIRE = False
+    _API_KEY_TIERS = api_keys.tier_table()
+    install_rate_limit_middleware(api, _RATE_LIMITER, path_prefix="/v1")
+
+
+def _get_api_key_store():
+    return _API_KEY_STORE
+
+
+def _get_api_key_meter():
+    return _API_KEY_METER
 
 _MODEL_EVAL_REPORT_PATH = REPO_DIR / "data" / "model_eval_report.json"
 
@@ -1356,6 +1394,12 @@ api.include_router(
             vru_provider=_get_vru_layer,
             work_zone_provider=_get_work_zone_store,
             traffic_speed_provider=_get_traffic_speed_store,
+            api_keys_enabled=_API_KEY_CONFIG is not None,
+            api_key_require=_API_KEY_REQUIRE,
+            api_key_store_provider=_get_api_key_store,
+            api_key_usage_provider=_get_api_key_meter,
+            api_key_tiers=_API_KEY_TIERS,
+            api_key_admin_token=_API_KEY_ADMIN_TOKEN,
         )
     )
 )

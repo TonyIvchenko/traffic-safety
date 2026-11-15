@@ -100,8 +100,9 @@ export TOMORROW_IO_API_KEY=...
 
 A versioned, openly accessible REST API exposes the model outputs for external
 consumers. Interactive docs are served at `/v1/docs` (Swagger) and `/v1/redoc`;
-the schema is at `/v1/openapi.json`. There is **no authentication** — access is
-controlled only by a per-client-IP rate limiter.
+the schema is at `/v1/openapi.json`. By default there is **no authentication** —
+access is controlled only by a per-client-IP rate limiter. Deployments that need
+tiered limits can turn on [optional API keys](#api-keys--tiering).
 
 ### APIs at a glance
 
@@ -124,6 +125,7 @@ controlled only by a per-client-IP rate limiter.
 | [Emergency](#emergency-response--evacuation) | `/v1/emergency/*` | Nearest facilities, evacuation routing, regional readiness |
 | [Open data](#open-data--validation) | `/v1/datasets/*`, `/v1/validation/*` | Dataset catalog + download, data-quality validation |
 | [Unified profile](#unified-location-profile) | `/v1/profile/*` | One call joining risk + equity + countermeasure + facility for a point or route |
+| [API keys](#api-keys--tiering) | `/v1/keys/*` | Optional tiered keys (rate + daily quota) with per-instance usage metering |
 | Discovery | `/v1/meta`, `/v1/health`, `/v1/model/report` | Capabilities, liveness, model calibration backtest |
 
 Core risk endpoints:
@@ -178,6 +180,12 @@ export TRAFFIC_SAFETY_RATE_LIMIT_PER_MIN=120   # default 120; set 0 or ENABLED=0
 export TRAFFIC_SAFETY_RATE_LIMIT_BURST=120     # default = per-minute rate
 export TRAFFIC_SAFETY_RATE_LIMIT_ENABLED=1
 
+# Optional API keys / tiering (off by default; see "API keys & tiering")
+export TRAFFIC_SAFETY_API_KEYS_ENABLED=1       # turn the keyed middleware on
+export TRAFFIC_SAFETY_API_ADMIN_TOKEN=change-me  # required to mint/manage keys
+export TRAFFIC_SAFETY_API_REQUIRE_KEY=0        # 1 = reject anonymous /v1 traffic
+export TRAFFIC_SAFETY_API_KEY_DB=/data/api_keys.sqlite3
+
 # CORS for browser clients (comma-separated origins; default "*")
 export TRAFFIC_SAFETY_CORS_ORIGINS="*"
 
@@ -194,6 +202,52 @@ export TRAFFIC_SAFETY_TILES_DIR=/data/tiles
 
 Successful `/v1` responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`;
 throttled requests return `429` with `Retry-After`.
+
+## API keys & tiering
+
+API keys are **off by default** — the service stays openly accessible with the
+anonymous IP rate limiter above. Set `TRAFFIC_SAFETY_API_KEYS_ENABLED=1` to turn
+on a keyed middleware that attributes each `/v1` request to an identity and
+applies that identity's **tier**:
+
+| Tier | Per-minute | Daily quota | Issuable |
+|---|---|---|---|
+| `anonymous` | 120 (or your IP-limiter rate) | 10,000 | — |
+| `free` | 240 | 50,000 | ✅ |
+| `standard` | 1,200 | 1,000,000 | ✅ |
+| `enterprise` | 6,000 | unlimited | ✅ |
+
+A request presents its key as `X-API-Key: <key>` (or `Authorization: Bearer
+<key>`); anything without a valid key falls back to the `anonymous` tier, keyed
+by client IP. Set `TRAFFIC_SAFETY_API_REQUIRE_KEY=1` to reject anonymous traffic
+instead. Responses add `X-API-Key-Tier` and, for keyed tiers, the
+`X-RateLimit-Quota` / `X-RateLimit-Quota-Remaining` headers.
+
+Keys are **minted by an operator**, gated by `TRAFFIC_SAFETY_API_ADMIN_TOKEN`
+(sent as the `X-Admin-Token` header). The raw key is returned **once** at
+creation — only its SHA-256 hash is stored, so a leaked database never exposes a
+usable key.
+
+```bash
+# Mint a key (admin); the response's api_key is shown only this once
+curl -X POST "http://127.0.0.1:8080/v1/keys" \
+  -H "X-Admin-Token: $TRAFFIC_SAFETY_API_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"tier": "standard", "label": "Acme Traffic Dept"}'
+
+# Check your tier, limits, and usage with the key itself
+curl "http://127.0.0.1:8080/v1/keys/me" -H "X-API-Key: rsk_..."
+
+# Operator views (admin): list keys with usage, revoke, delete
+curl "http://127.0.0.1:8080/v1/keys" -H "X-Admin-Token: $TRAFFIC_SAFETY_API_ADMIN_TOKEN"
+curl -X POST "http://127.0.0.1:8080/v1/keys/<id>/revoke" -H "X-Admin-Token: $TRAFFIC_SAFETY_API_ADMIN_TOKEN"
+```
+
+Key *lifecycle* (create / revoke / delete) is persisted in SQLite; per-request
+*usage* is counted **in memory per server instance** (like the rate limiter), so
+the hot path does no disk I/O — aggregate the exported counts across replicas if
+you scale horizontally. `GET /v1/meta` advertises whether keys are enabled and
+the full tier table.
 
 ## Federal Safety-Grant Analysis (SS4A / HSIP)
 

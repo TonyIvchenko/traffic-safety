@@ -9,20 +9,22 @@ its already-loaded model/overlay/provider objects and includes the router.
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hmac
 import io
 import json
 import math
 from typing import Callable, Sequence
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 import requests
 
 import advisory
 import advisory_messages
+import api_keys
 import crash_costs
 import datasets as datasets_catalog
 import evacuation
@@ -205,6 +207,11 @@ class WatchUpdateRequest(BaseModel):
     active: bool
 
 
+class ApiKeyCreateRequest(BaseModel):
+    tier: str = api_keys.DEFAULT_TIER
+    label: str | None = Field(None, max_length=200)
+
+
 class ValidationRequest(BaseModel):
     dataset: str
     records: list[dict] = Field(default_factory=list)
@@ -320,6 +327,13 @@ class V1Dependencies:
     vru_provider: Callable[[], object]
     work_zone_provider: Callable[[], object]
     traffic_speed_provider: Callable[[], object]
+    # API keys / tiering (Horizon 4). Opt-in: disabled unless main wires a store.
+    api_keys_enabled: bool = False
+    api_key_require: bool = False
+    api_key_store_provider: Callable[[], object] | None = None
+    api_key_usage_provider: Callable[[], object] | None = None
+    api_key_tiers: dict = field(default_factory=lambda: dict(api_keys.TIERS))
+    api_key_admin_token: str | None = None
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -1005,9 +1019,34 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
             "providers_accepted": deps.provider_choices,
             "units": UNITS,
             "rate_limit": {
-                "scope": "per_client_ip",
+                "scope": "per_api_key_or_client_ip" if deps.api_keys_enabled else "per_client_ip",
                 "per_minute": deps.rate_limit_per_min,
-                "enabled": deps.rate_limit_per_min is not None,
+                "enabled": deps.rate_limit_per_min is not None or deps.api_keys_enabled,
+            },
+            "api_keys": {
+                "enabled": deps.api_keys_enabled,
+                "require_key": deps.api_key_require,
+                "auth_header": api_keys.API_KEY_HEADER,
+                "tiers": [
+                    {
+                        "name": name,
+                        "label": spec.get("label"),
+                        "rate_per_min": spec.get("rate_per_min"),
+                        "daily_quota": spec.get("daily_quota"),
+                        "issuable": bool(spec.get("issuable")),
+                    }
+                    for name, spec in (deps.api_key_tiers or {}).items()
+                ],
+                "self_endpoint": "/v1/keys/me",
+                "admin_endpoints": ["/v1/keys", "/v1/keys/{id}"],
+                "note": (
+                    "Optional API keys with per-tier rate limits and daily quotas. "
+                    "Disabled by default (anonymous access, IP rate limiting). When "
+                    "enabled, present a key as the X-API-Key header (or Authorization: "
+                    "Bearer) to get your tier's limits; GET /v1/keys/me reports your tier "
+                    "and usage. Keys are minted by an operator (admin-token-gated) and "
+                    "shown only once. Usage is metered per server instance."
+                ),
             },
             "watches": {
                 "enabled": True,
@@ -3257,5 +3296,110 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
         _authorized_watch(watch_id, token)
         deps.watch_store_provider().delete_watch(watch_id, token)
         return {"deleted": True, "id": watch_id}
+
+    # --- API keys / tiering (Horizon 4) ---
+    def _api_key_store():
+        store = deps.api_key_store_provider() if deps.api_key_store_provider else None
+        if not deps.api_keys_enabled or store is None:
+            raise HTTPException(
+                status_code=404, detail="API keys are not enabled on this deployment"
+            )
+        return store
+
+    def _require_admin(admin_token: str | None):
+        store = _api_key_store()
+        configured = deps.api_key_admin_token
+        if not configured:
+            raise HTTPException(
+                status_code=404,
+                detail="API key management is not configured on this deployment",
+            )
+        if not admin_token or not hmac.compare_digest(str(admin_token), str(configured)):
+            raise HTTPException(status_code=401, detail="invalid or missing admin token")
+        return store
+
+    def _key_usage(key_id: str) -> dict:
+        meter = deps.api_key_usage_provider() if deps.api_key_usage_provider else None
+        if meter is None:
+            return {"requests_today": 0, "requests_total": 0, "last_request_at": None}
+        usage = meter.usage(api_keys.identity_key(key_id))
+        usage.pop("date", None)
+        return usage
+
+    @router.post(
+        "/keys",
+        status_code=201,
+        summary="Mint an API key (admin only); the key is shown once",
+    )
+    def create_api_key(
+        response: Response,
+        body: ApiKeyCreateRequest,
+        x_admin_token: str | None = Header(default=None),
+    ) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        store = _require_admin(x_admin_token)
+        try:
+            record = store.create_key(tier=body.tier, label=body.label)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return api_keys.public_view(record, include_secret=True)
+
+    @router.get("/keys", summary="List API keys with usage (admin only)")
+    def list_api_keys(
+        response: Response, x_admin_token: str | None = Header(default=None)
+    ) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        store = _require_admin(x_admin_token)
+        keys = []
+        for record in store.list_keys():
+            view = api_keys.public_view(record)
+            view["usage"] = _key_usage(record["id"])
+            keys.append(view)
+        return {"count": len(keys), "keys": keys}
+
+    @router.get("/keys/me", summary="Your API key's tier, limits, and usage")
+    def api_key_self(
+        response: Response, x_api_key: str | None = Header(default=None)
+    ) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        store = _api_key_store()
+        raw = api_keys.extract_key(x_api_key, None)
+        record = store.authenticate(raw) if raw else None
+        if record is None:
+            raise HTTPException(status_code=401, detail="invalid or missing API key")
+        tiers = deps.api_key_tiers or api_keys.TIERS
+        spec = tiers.get(record["tier"], {})
+        usage = _key_usage(record["id"])
+        quota = spec.get("daily_quota")
+        remaining = None if quota is None else max(0, int(quota) - int(usage["requests_today"]))
+        view = api_keys.public_view(record)
+        view["limits"] = {
+            "rate_per_min": spec.get("rate_per_min"),
+            "daily_quota": quota,
+            "quota_remaining_today": remaining,
+        }
+        view["usage"] = usage
+        return view
+
+    @router.post("/keys/{key_id}/revoke", summary="Revoke (deactivate) a key (admin only)")
+    def revoke_api_key(
+        response: Response, key_id: str, x_admin_token: str | None = Header(default=None)
+    ) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        store = _require_admin(x_admin_token)
+        record = store.set_active(key_id, False)
+        if record is None:
+            raise HTTPException(status_code=404, detail="no such key")
+        return api_keys.public_view(record)
+
+    @router.delete("/keys/{key_id}", summary="Delete a key (admin only)")
+    def delete_api_key(
+        response: Response, key_id: str, x_admin_token: str | None = Header(default=None)
+    ) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        store = _require_admin(x_admin_token)
+        if not store.delete(key_id):
+            raise HTTPException(status_code=404, detail="no such key")
+        return {"deleted": True, "id": key_id}
 
     return router
