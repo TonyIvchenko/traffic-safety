@@ -247,7 +247,9 @@ Key *lifecycle* (create / revoke / delete) is persisted in SQLite; per-request
 *usage* is counted **in memory per server instance** (like the rate limiter), so
 the hot path does no disk I/O — aggregate the exported counts across replicas if
 you scale horizontally. `GET /v1/meta` advertises whether keys are enabled and
-the full tier table.
+the full tier table. A developer-facing portal renders at **`/developers`**: the
+tier table, how to authenticate, and a "check your key" tool over
+`/v1/keys/me` (no key-minting UI — issuance stays operator-only).
 
 ## Federal Safety-Grant Analysis (SS4A / HSIP)
 

@@ -120,6 +120,11 @@ IMPACT_ASSET_HREFS = {
     "js": f"/traffic-safety-static/impact.js?v={STATIC_ASSET_VERSION}",
 }
 
+DEVELOPERS_ASSET_HREFS = {
+    "css": f"/traffic-safety-static/developers.css?v={STATIC_ASSET_VERSION}",
+    "js": f"/traffic-safety-static/developers.js?v={STATIC_ASSET_VERSION}",
+}
+
 TILE_SIZE = 256
 SAMPLE_SIZE = 64
 
@@ -412,6 +417,7 @@ def _site_nav(active_page: str) -> str:
         ("map", "/map", "Map"),
         ("alerts", "/alerts", "Advisory & Alerts"),
         ("impact", "/impact", "Impact"),
+        ("developers", "/developers", "Developers"),
         ("about", "/about", "About"),
         ("contact", "/contact", "Contact"),
     ]
@@ -753,6 +759,93 @@ def _impact_page_html() -> str:
         content=_impact_page_content(),
         extra_head=f'<link rel="stylesheet" href="{IMPACT_ASSET_HREFS["css"]}">',
         extra_script=f'<script src="{IMPACT_ASSET_HREFS["js"]}" defer></script>',
+    )
+
+
+def _developers_page_content() -> str:
+    config_blob = html.escape(json.dumps({"api_base": "/v1"}), quote=True)
+    return f"""
+    <div id="dev-shell" class="dev-shell" data-config="{config_blob}">
+      {_site_nav("developers")}
+      <header class="dev-hero">
+        <h2>Build on the Road Risk API</h2>
+        <p>
+          Every map, alert, and dashboard on this site is built on the open
+          <code>/v1</code> API &mdash; the same endpoints you can call. Access is
+          free and needs no key by default; deployments that need higher, metered
+          limits can issue tiered API keys.
+        </p>
+        <p id="dev-status" class="dev-status" role="status"></p>
+      </header>
+
+      <section class="dev-section" aria-label="Authentication">
+        <h3>Authentication</h3>
+        <p id="dev-auth-note" class="dev-auth-note"></p>
+        <p>
+          Present a key on each request as an <code>X-API-Key</code> header
+          (or <code>Authorization: Bearer &lt;key&gt;</code>). Keyed responses add
+          <code>X-API-Key-Tier</code> and, where a quota applies,
+          <code>X-RateLimit-Quota</code> / <code>X-RateLimit-Quota-Remaining</code>.
+          Keys are issued by the operator and shown only once &mdash; store yours
+          somewhere safe.
+        </p>
+      </section>
+
+      <section class="dev-section" aria-label="Tiers">
+        <h3>Tiers &amp; limits</h3>
+        <table class="dev-tiers">
+          <thead>
+            <tr><th>Tier</th><th>Per minute</th><th>Daily quota</th><th>Key required</th></tr>
+          </thead>
+          <tbody id="dev-tiers-body"></tbody>
+        </table>
+        <p class="dev-fineprint">
+          Rate and usage are enforced per server instance. Exceeding the
+          per-minute rate returns <code>429</code> with <code>Retry-After</code>;
+          exceeding the daily quota returns <code>429</code> until the next UTC day.
+        </p>
+      </section>
+
+      <section class="dev-section dev-checker" aria-label="Check your key">
+        <h3>Check your key</h3>
+        <p>
+          Paste a key to see its tier, limits, and today's usage. The key is sent
+          only to this API to read <code>/v1/keys/me</code> and is never stored.
+        </p>
+        <div class="dev-checker-row">
+          <input
+            id="dev-key-input"
+            class="dev-key-input"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="rsk_…"
+            aria-label="Your API key"
+          >
+          <button id="dev-key-check" class="dev-key-check" type="button">Check</button>
+        </div>
+        <div id="dev-key-result" class="dev-key-result"></div>
+      </section>
+
+      <section class="dev-section" aria-label="Reference">
+        <h3>Reference</h3>
+        <ul class="dev-links">
+          <li><a href="/v1/docs">Interactive API docs (Swagger)</a></li>
+          <li><a href="/v1/redoc">API reference (ReDoc)</a></li>
+          <li><a href="/v1/openapi.json">OpenAPI schema</a></li>
+          <li><a href="/v1/meta">Capabilities &amp; discovery (<code>/v1/meta</code>)</a></li>
+        </ul>
+      </section>
+    </div>
+    """
+
+
+def _developers_page_html() -> str:
+    return _document_html(
+        title="Road Risk Monitor | Developers",
+        content=_developers_page_content(),
+        extra_head=f'<link rel="stylesheet" href="{DEVELOPERS_ASSET_HREFS["css"]}">',
+        extra_script=f'<script src="{DEVELOPERS_ASSET_HREFS["js"]}" defer></script>',
     )
 
 
@@ -1559,6 +1652,11 @@ def alerts_page() -> HTMLResponse:
 @api.get("/impact", response_class=HTMLResponse)
 def impact_page() -> HTMLResponse:
     return HTMLResponse(_impact_page_html())
+
+
+@api.get("/developers", response_class=HTMLResponse)
+def developers_page() -> HTMLResponse:
+    return HTMLResponse(_developers_page_html())
 
 
 @api.get("/about", response_class=HTMLResponse)

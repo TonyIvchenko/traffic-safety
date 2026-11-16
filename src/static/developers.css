@@ -1,0 +1,206 @@
+/* Developer portal page. Scoped under .dev-shell so it coexists with the
+   operational map stylesheet (map.css) loaded site-wide. */
+.dev-shell {
+  --dvx-bg: #0d1117;
+  --dvx-panel: #161b22;
+  --dvx-panel-2: #1c2230;
+  --dvx-border: #2a3344;
+  --dvx-text: #e6edf3;
+  --dvx-muted: #9aa7b4;
+  --dvx-accent: #4c9aff;
+  --dvx-code-bg: #11161f;
+  --dvx-ok: #1a9850;
+  --dvx-warn: #d7a21c;
+  --dvx-error: #d7191c;
+  color: var(--dvx-text);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-bottom: 48px;
+}
+
+@media (prefers-color-scheme: light) {
+  .dev-shell {
+    --dvx-bg: #f6f8fa;
+    --dvx-panel: #ffffff;
+    --dvx-panel-2: #f0f3f7;
+    --dvx-border: #d7dee6;
+    --dvx-text: #1b2733;
+    --dvx-muted: #5a6572;
+    --dvx-code-bg: #eef1f5;
+  }
+}
+
+.dev-shell code {
+  background: var(--dvx-code-bg);
+  border: 1px solid var(--dvx-border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 0.86em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.dev-hero {
+  padding: 24px clamp(16px, 4vw, 48px) 0;
+}
+.dev-hero h2 {
+  margin: 0 0 6px;
+  font-size: clamp(1.4rem, 3.4vw, 2.1rem);
+  line-height: 1.15;
+}
+.dev-hero p {
+  margin: 0 0 8px;
+  max-width: 72ch;
+  color: var(--dvx-muted);
+  line-height: 1.5;
+}
+
+.dev-status {
+  font-weight: 600;
+}
+.dev-status.enabled {
+  color: var(--dvx-ok) !important;
+}
+.dev-status.disabled {
+  color: var(--dvx-muted) !important;
+}
+.dev-status.error {
+  color: var(--dvx-error) !important;
+}
+
+.dev-section {
+  margin: 0 clamp(16px, 4vw, 48px);
+  background: var(--dvx-panel);
+  border: 1px solid var(--dvx-border);
+  border-radius: 12px;
+  padding: 18px 20px 20px;
+}
+.dev-section h3 {
+  margin: 0 0 10px;
+  font-size: 1.1rem;
+}
+.dev-section p {
+  margin: 0 0 10px;
+  max-width: 74ch;
+  color: var(--dvx-muted);
+  line-height: 1.5;
+}
+.dev-section p:last-child {
+  margin-bottom: 0;
+}
+.dev-auth-note {
+  color: var(--dvx-text) !important;
+  font-weight: 600;
+}
+
+.dev-tiers {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.dev-tiers th,
+.dev-tiers td {
+  text-align: left;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--dvx-border);
+}
+.dev-tiers th {
+  color: var(--dvx-muted);
+  font-weight: 600;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dev-tiers tbody tr:last-child td {
+  border-bottom: none;
+}
+.dev-tiers .dev-tier-name {
+  font-weight: 600;
+  color: var(--dvx-text);
+}
+.dev-fineprint {
+  font-size: 0.86rem;
+}
+
+.dev-checker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.dev-key-input {
+  flex: 1 1 260px;
+  min-width: 0;
+  background: var(--dvx-panel-2);
+  border: 1px solid var(--dvx-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--dvx-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+}
+.dev-key-input:focus {
+  outline: 2px solid var(--dvx-accent);
+  outline-offset: 1px;
+}
+.dev-key-check {
+  background: var(--dvx-accent);
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+.dev-key-check:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dev-key-result {
+  min-height: 1.2em;
+}
+.dev-key-result.error {
+  color: var(--dvx-error);
+}
+.dev-key-result dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0;
+  background: var(--dvx-panel-2);
+  border: 1px solid var(--dvx-border);
+  border-radius: 10px;
+  padding: 4px 16px;
+}
+.dev-key-result div {
+  display: contents;
+}
+.dev-key-result dt {
+  padding: 8px 0;
+  color: var(--dvx-muted);
+  border-bottom: 1px solid var(--dvx-border);
+}
+.dev-key-result dd {
+  padding: 8px 0;
+  margin: 0;
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--dvx-border);
+}
+.dev-key-result div:last-child dt,
+.dev-key-result div:last-child dd {
+  border-bottom: none;
+}
+
+.dev-links {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.7;
+}
+.dev-links a {
+  color: var(--dvx-accent);
+}
