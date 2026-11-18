@@ -125,6 +125,11 @@ DEVELOPERS_ASSET_HREFS = {
     "js": f"/traffic-safety-static/developers.js?v={STATIC_ASSET_VERSION}",
 }
 
+MODEL_CARD_ASSET_HREFS = {
+    "css": f"/traffic-safety-static/model-card.css?v={STATIC_ASSET_VERSION}",
+    "js": f"/traffic-safety-static/model-card.js?v={STATIC_ASSET_VERSION}",
+}
+
 TILE_SIZE = 256
 SAMPLE_SIZE = 64
 
@@ -418,6 +423,7 @@ def _site_nav(active_page: str) -> str:
         ("alerts", "/alerts", "Advisory & Alerts"),
         ("impact", "/impact", "Impact"),
         ("developers", "/developers", "Developers"),
+        ("model-card", "/model-card", "Model card"),
         ("about", "/about", "About"),
         ("contact", "/contact", "Contact"),
     ]
@@ -834,6 +840,7 @@ def _developers_page_content() -> str:
           <li><a href="/v1/redoc">API reference (ReDoc)</a></li>
           <li><a href="/v1/openapi.json">OpenAPI schema</a></li>
           <li><a href="/v1/meta">Capabilities &amp; discovery (<code>/v1/meta</code>)</a></li>
+          <li><a href="/model-card">Model card &mdash; how the model works and its limits</a></li>
         </ul>
       </section>
     </div>
@@ -846,6 +853,85 @@ def _developers_page_html() -> str:
         content=_developers_page_content(),
         extra_head=f'<link rel="stylesheet" href="{DEVELOPERS_ASSET_HREFS["css"]}">',
         extra_script=f'<script src="{DEVELOPERS_ASSET_HREFS["js"]}" defer></script>',
+    )
+
+
+def _model_card_page_content() -> str:
+    config_blob = html.escape(json.dumps({"api_base": "/v1"}), quote=True)
+    return f"""
+    <div id="card-shell" class="card-shell" data-config="{config_blob}">
+      {_site_nav("model-card")}
+      <header class="card-hero">
+        <h2>Model card</h2>
+        <p>
+          How the crash-risk model was built, what it is &mdash; and is not &mdash;
+          meant for, how well it performs, and the judgement calls behind it. This
+          page is rendered live from the model actually deployed
+          (<a href="/v1/model/card">/v1/model/card</a>), so it never drifts from
+          what is serving your requests.
+        </p>
+        <p id="card-subtitle" class="card-subtitle"></p>
+      </header>
+
+      <div id="card-status" class="card-status" role="status"></div>
+
+      <section class="card-section" aria-label="Model details">
+        <h3>Model details</h3>
+        <dl id="card-details" class="card-dl"></dl>
+      </section>
+
+      <section class="card-section" aria-label="Performance">
+        <h3>Performance</h3>
+        <div id="card-metrics" class="card-metrics"></div>
+        <div id="card-thresholds" class="card-thresholds"></div>
+        <p class="card-fineprint" id="card-metrics-note"></p>
+      </section>
+
+      <section class="card-section card-use" aria-label="Intended use">
+        <h3>Intended use</h3>
+        <div class="card-use-grid">
+          <div>
+            <h4>Primary uses</h4>
+            <ul id="card-uses"></ul>
+          </div>
+          <div>
+            <h4>Primary users</h4>
+            <ul id="card-users"></ul>
+          </div>
+          <div>
+            <h4 class="card-out">Out of scope</h4>
+            <ul id="card-out-of-scope"></ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="card-section" aria-label="Training &amp; evaluation data">
+        <h3>Training &amp; evaluation data</h3>
+        <dl id="card-data" class="card-dl"></dl>
+        <ul id="card-sources" class="card-sources"></ul>
+      </section>
+
+      <section class="card-section" aria-label="Ethical considerations">
+        <h3>Ethical considerations</h3>
+        <ul id="card-ethics" class="card-list"></ul>
+      </section>
+
+      <section class="card-section" aria-label="Caveats &amp; recommendations">
+        <h3>Caveats &amp; recommendations</h3>
+        <ul id="card-caveats" class="card-list"></ul>
+      </section>
+
+      <footer id="card-footer" class="card-footer"></footer>
+    </div>
+    """
+
+
+def _model_card_page_html() -> str:
+    return _document_html(
+        title="Road Risk Monitor | Model card",
+        content=_model_card_page_content(),
+        extra_head=f'<link rel="stylesheet" href="{MODEL_CARD_ASSET_HREFS["css"]}">',
+        extra_script=f'<script src="{MODEL_CARD_ASSET_HREFS["js"]}" defer></script>',
     )
 
 
@@ -1672,6 +1758,11 @@ def impact_page() -> HTMLResponse:
 @api.get("/developers", response_class=HTMLResponse)
 def developers_page() -> HTMLResponse:
     return HTMLResponse(_developers_page_html())
+
+
+@api.get("/model-card", response_class=HTMLResponse)
+def model_card_page() -> HTMLResponse:
+    return HTMLResponse(_model_card_page_html())
 
 
 @api.get("/about", response_class=HTMLResponse)

@@ -1,0 +1,217 @@
+/* Model card page. Scoped under .card-shell so it coexists with the operational
+   map stylesheet (map.css) loaded site-wide. */
+.card-shell {
+  --cdx-bg: #0d1117;
+  --cdx-panel: #161b22;
+  --cdx-panel-2: #1c2230;
+  --cdx-border: #2a3344;
+  --cdx-text: #e6edf3;
+  --cdx-muted: #9aa7b4;
+  --cdx-accent: #4c9aff;
+  --cdx-code-bg: #11161f;
+  --cdx-warn: #d7a21c;
+  --cdx-error: #d7191c;
+  color: var(--cdx-text);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-bottom: 48px;
+}
+
+@media (prefers-color-scheme: light) {
+  .card-shell {
+    --cdx-bg: #f6f8fa;
+    --cdx-panel: #ffffff;
+    --cdx-panel-2: #f0f3f7;
+    --cdx-border: #d7dee6;
+    --cdx-text: #1b2733;
+    --cdx-muted: #5a6572;
+    --cdx-code-bg: #eef1f5;
+  }
+}
+
+.card-shell code {
+  background: var(--cdx-code-bg);
+  border: 1px solid var(--cdx-border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 0.86em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.card-shell a {
+  color: var(--cdx-accent);
+}
+
+.card-hero {
+  padding: 24px clamp(16px, 4vw, 48px) 0;
+}
+.card-hero h2 {
+  margin: 0 0 6px;
+  font-size: clamp(1.4rem, 3.4vw, 2.1rem);
+  line-height: 1.15;
+}
+.card-hero p {
+  margin: 0 0 8px;
+  max-width: 74ch;
+  color: var(--cdx-muted);
+  line-height: 1.5;
+}
+.card-subtitle {
+  color: var(--cdx-text) !important;
+  font-weight: 600;
+}
+
+.card-status {
+  padding: 0 clamp(16px, 4vw, 48px);
+  color: var(--cdx-muted);
+  min-height: 1.2em;
+}
+.card-status.error {
+  color: var(--cdx-error);
+}
+
+.card-section {
+  margin: 0 clamp(16px, 4vw, 48px);
+  background: var(--cdx-panel);
+  border: 1px solid var(--cdx-border);
+  border-radius: 12px;
+  padding: 18px 20px 20px;
+}
+.card-section h3 {
+  margin: 0 0 12px;
+  font-size: 1.1rem;
+}
+.card-section h4 {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cdx-muted);
+}
+.card-section h4.card-out {
+  color: var(--cdx-warn);
+}
+
+/* Definition lists (details + data) */
+.card-dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(160px, 240px) 1fr;
+  gap: 0;
+}
+.card-dl div {
+  display: contents;
+}
+.card-dl dt {
+  padding: 9px 0;
+  color: var(--cdx-muted);
+  border-bottom: 1px solid var(--cdx-border);
+}
+.card-dl dd {
+  padding: 9px 0;
+  margin: 0;
+  font-weight: 600;
+  border-bottom: 1px solid var(--cdx-border);
+}
+.card-dl div:last-child dt,
+.card-dl div:last-child dd {
+  border-bottom: none;
+}
+
+/* Performance */
+.card-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.card-metric {
+  background: var(--cdx-panel-2);
+  border: 1px solid var(--cdx-border);
+  border-radius: 10px;
+  padding: 12px 18px;
+  min-width: 140px;
+}
+.card-metric .card-metric-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cdx-muted);
+  margin-bottom: 4px;
+}
+.card-metric .card-metric-value {
+  font-size: 1.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.card-thresholds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.card-threshold {
+  font-size: 0.85rem;
+  color: var(--cdx-muted);
+  border: 1px solid var(--cdx-border);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-variant-numeric: tabular-nums;
+}
+.card-threshold strong {
+  color: var(--cdx-text);
+}
+.card-threshold-label {
+  font-size: 0.85rem;
+  color: var(--cdx-muted);
+  margin-right: 4px;
+}
+.card-muted {
+  color: var(--cdx-muted);
+  font-weight: 400;
+}
+.card-fineprint {
+  margin: 0;
+  color: var(--cdx-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+/* Intended use */
+.card-use-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 18px;
+}
+.card-use-grid ul {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.5;
+  color: var(--cdx-muted);
+}
+.card-use-grid li {
+  margin-bottom: 6px;
+}
+
+/* Lists (ethics, caveats, sources) */
+.card-list,
+.card-sources {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.55;
+  color: var(--cdx-muted);
+}
+.card-list li,
+.card-sources li {
+  margin-bottom: 8px;
+}
+.card-sources {
+  margin-top: 12px;
+}
+
+.card-footer {
+  margin: 0 clamp(16px, 4vw, 48px);
+  color: var(--cdx-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
