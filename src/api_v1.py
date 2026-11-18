@@ -33,6 +33,7 @@ import exposure
 import facilities
 import grant_html
 import impact
+import model_card
 import notify
 import program_builder
 import source_catalog
@@ -334,6 +335,8 @@ class V1Dependencies:
     api_key_usage_provider: Callable[[], object] | None = None
     api_key_tiers: dict = field(default_factory=lambda: dict(api_keys.TIERS))
     api_key_admin_token: str | None = None
+    # Model-card metadata derived from the model bundle (for /v1/model/card).
+    model_card_metadata: dict = field(default_factory=dict)
 
 
 def _effective_thresholds(risk_quantiles: object) -> dict[str, float]:
@@ -1292,6 +1295,17 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
                     "schema; model calibration and backtest are at /v1/model/report."
                 ),
             },
+            "model_card": {
+                "enabled": True,
+                "framework": model_card.CARD_FRAMEWORK,
+                "endpoint": "/v1/model/card",
+                "note": (
+                    "A structured model card (Mitchell et al. 2019): model details, "
+                    "intended use and out-of-scope use, factors, metrics and decision "
+                    "thresholds, training/evaluation data, ethical considerations, and "
+                    "caveats. Read it before building on the risk scores."
+                ),
+            },
             "profile": {
                 "enabled": True,
                 "endpoints": ["/v1/profile/point", "/v1/profile/route"],
@@ -1311,6 +1325,28 @@ def build_v1_router(deps: V1Dependencies) -> APIRouter:
     def model_report(response: Response) -> dict:
         response.headers["Cache-Control"] = "public, max-age=300"
         return deps.model_report_loader()
+
+    @router.get("/model/card", summary="Model card (transparency: details, use, metrics, caveats)")
+    def model_card_endpoint(response: Response) -> dict:
+        response.headers["Cache-Control"] = "public, max-age=300"
+        return model_card.build_model_card(
+            service_name=deps.service_name,
+            model_version=deps.model_version,
+            model_ready=deps.model_ready,
+            metadata=deps.model_card_metadata,
+            metrics=deps.model_metrics,
+            report=deps.model_report_loader(),
+            risk_thresholds=_effective_thresholds(deps.risk_quantiles),
+            coverage=deps.coverage,
+            frame_count=len(deps.frame_labels),
+            caveats=advisory_messages.caveats(),
+            data_sources={
+                "training": source_catalog.resolve_sources(
+                    ["us_accidents", "fars", "noaa_ncei"]
+                ),
+                "live": source_catalog.resolve_sources(["nws_api", "noaa_ncei"]),
+            },
+        )
 
     @router.post(
         "/evaluation/before-after",

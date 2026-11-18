@@ -126,7 +126,7 @@ tiered limits can turn on [optional API keys](#api-keys--tiering).
 | [Open data](#open-data--validation) | `/v1/datasets/*`, `/v1/validation/*` | Dataset catalog + download, data-quality validation |
 | [Unified profile](#unified-location-profile) | `/v1/profile/*` | One call joining risk + equity + countermeasure + facility for a point or route |
 | [API keys](#api-keys--tiering) | `/v1/keys/*` | Optional tiered keys (rate + daily quota) with per-instance usage metering |
-| Discovery | `/v1/meta`, `/v1/health`, `/v1/model/report` | Capabilities, liveness, model calibration backtest |
+| Discovery | `/v1/meta`, `/v1/health`, `/v1/model/report`, `/v1/model/card` | Capabilities, liveness, calibration backtest, model card |
 
 Core risk endpoints:
 
@@ -817,13 +817,24 @@ returns a `422` naming them rather than dumping an unbounded response.
 |---|---|
 | `POST /v1/validation/data` | Validate records against a dataset schema — reports missing/type/range/allowed-value/duplicate/non-finite issues before you drop a file in |
 | `GET /v1/model/report` | Model calibration & backtest (Brier score, reliability bins, expected calibration error) |
+| `GET /v1/model/card` | Model card (Mitchell et al. 2019): model details, intended & out-of-scope use, metrics, data, ethics, caveats |
 
 ```bash
 # Vet a replacement facilities file before deploying it
 curl -X POST "http://127.0.0.1:8080/v1/validation/data" \
   -H 'content-type: application/json' \
   -d '{"dataset":"critical_facilities","records":[{"id":"h1","name":"Test","kind":"hospital","lat":34.0,"lon":-118.0}]}'
+
+# Read the model card before building on the risk scores
+curl "http://127.0.0.1:8080/v1/model/card"
 ```
+
+The **model card** is a structured transparency document: it states what the
+model is and how it was trained (features, training/evaluation years,
+discrimination metrics, decision thresholds), what it is and is **not** meant for,
+its ethical considerations (crash-data reporting bias, equity), and its caveats.
+It is composed live from the model bundle's own metadata, so it never drifts from
+the deployed model.
 
 The `meta.datasets` and `meta.validation` blocks at `/v1/meta` list the catalog
 size, formats, available validation schemas, and these endpoints.

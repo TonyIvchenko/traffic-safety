@@ -1493,6 +1493,21 @@ api.include_router(
             api_key_usage_provider=_get_api_key_meter,
             api_key_tiers=_API_KEY_TIERS,
             api_key_admin_token=_API_KEY_ADMIN_TOKEN,
+            model_card_metadata={
+                "model_type": (
+                    type(MODEL_BUNDLE.get("model")).__name__
+                    if MODEL_BUNDLE.get("model") is not None
+                    else None
+                ),
+                "resolution": MODEL_BUNDLE.get("resolution"),
+                "feature_names": list(MODEL_BUNDLE.get("feature_names", []) or []),
+                "weather_feature_names": list(MODEL_BUNDLE.get("weather_feature_names", []) or []),
+                "n_features": len(MODEL_BUNDLE.get("feature_names", []) or []) or None,
+                "train_years": list(MODEL_BUNDLE.get("train_years", []) or []),
+                "eval_years": list(MODEL_BUNDLE.get("eval_years", []) or []),
+                "negative_sampling_ratio": MODEL_BUNDLE.get("negative_ratio"),
+                "spatial_cells": len(MODEL_BUNDLE.get("candidate_cells", []) or []) or None,
+            },
         )
     )
 )
